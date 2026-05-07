@@ -129,8 +129,8 @@ bar_recovery <- ggplot(metrics, aes(x = score, y = abs(Spearman), fill = score))
     facet_wrap(~ axis, ncol = 2) +
     scale_fill_manual(values = score_pal, guide = "none") +
     coord_cartesian(ylim = c(0, 1.05)) +
-    labs(x = NULL, y = "|Spearman ρ|",
-         title = "A. Recovery: amet (green), scMET (orange), epiCHAOS (purple)") +
+    labs(x = NULL, y = "|Spearman rho|",
+         title = "A. Recovery") +
     theme_ng() + theme(aspect.ratio = NULL,
                        axis.text.x = element_text(angle = 30, hjust = 1))
 

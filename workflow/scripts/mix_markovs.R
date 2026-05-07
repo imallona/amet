@@ -7,8 +7,8 @@
 source(file.path(.this_dir, "write_outputs.R"))
 source(file.path(.this_dir, "simulate_markov_chain.R"))
 
-simulate_mixture_cells <- function(n_cells, n_cpgs, components, seed = 1) {
-    set.seed(seed)
+simulate_mixture_cells <- function(n_cells, n_cpgs, components, seed = NULL) {
+    if (!is.null(seed)) set.seed(seed)
     k <- length(components)
     cells <- vector("list", n_cells)
     component_assignments <- integer(n_cells)

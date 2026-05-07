@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn coordinate_offset_pos_minus_2() {
-        // 1-based G pos 10, 20, 30 → 0-based C pos 8, 18, 28.
+        // 1-based G pos 10, 20, 30 -> 0-based C pos 8, 18, 28.
         let f = write(
             "chr\tpos\tmet_reads\tnonmet_reads\trate\n\
              chr1\t10\t1\t0\t1.0\n\

@@ -2,12 +2,12 @@
 ##
 ## Each cell is an independent realisation of a Markov-with-repeat process at
 ## marginal target_p. wcVI sets the repeat probability:
-##   wcVI = 1  → p_repeat = 0.95 → long runs of the same state, very predictable.
-##   wcVI = 10 → p_repeat = 0    → pure iid Bernoulli at target_p (no within-cell
+##   wcVI = 1  -> p_repeat = 0.95 -> long runs of the same state, very predictable.
+##   wcVI = 10 -> p_repeat = 0    -> pure iid Bernoulli at target_p (no within-cell
 ##                                  structure).
 ##
 ## Across-cell variability inside a (wcVI, target_p) group is just finite-sample
-## noise from independent draws — fully decoupled from acVI. No bricks are used,
+## noise from independent draws - fully decoupled from acVI. No bricks are used,
 ## so increasing wcVI does not enlarge any pool that cells share.
 
 suppressPackageStartupMessages({ library(optparse) })

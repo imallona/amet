@@ -33,23 +33,23 @@ show_plot <- function(name, caption = NULL) {
 
 amet computes two scores from single-cell DNA methylation data:
 
-- **I_norm** (within-cell): how predictable consecutive CpGs are inside one cell, normalised by what is achievable at that marginal methylation. Zero means no comethylation; higher means cleaner patterns. Defined as `I_norm = I_total / (k_max · H(p̂))`, where `I_total = sum_{k=1..k_max} I_k` is the cumulative mutual information across CpG lags and `H(p̂)` is the marginal Shannon entropy.
-- **JSD** (across-cell, per group): how much cells in the same group disagree with each other. Zero means cells look the same; higher means cells differ.
+- I_norm (within-cell): how predictable consecutive CpGs are inside one cell, normalised by what is achievable at that marginal methylation. Zero means no comethylation; higher means cleaner patterns. Defined as `I_norm = I_total / (k_max * H(p_hat))`, where `I_total = sum_{k=1..k_max} I_k` is the cumulative mutual information across CpG lags and `H(p_hat)` is the marginal Shannon entropy.
+- JSD (across-cell, per group): how much cells in the same group disagree with each other. Zero means cells look the same; higher means cells differ.
 
 This report runs amet on synthetic data with known properties and checks that the scores behave as expected.
 
 A few labels recur:
 
-- **iid**: a cell where every CpG is methylated (or not) independently of every other CpG, all from the same coin-flip with probability `p`. No comethylation. The no-signal baseline.
-- **structured**: a cell from a 2-state Markov chain. Adjacent CpGs tend to share their state, so there is real comethylation.
-- **Markov-with-repeat process** (used by both wcVI and acVI generators): each CpG is either copied from the previous CpG (with probability `p_repeat`) or sampled iid Bernoulli at the cell's target marginal `p`. `p_repeat = 0` is pure iid; `p_repeat = 0.95` produces long runs. Marginal `p` is preserved exactly by construction.
-- **mean methylation** on the x-axis is the fraction of methylated CpGs in the cell.
+- iid: a cell where every CpG is methylated (or not) independently of every other CpG, all from the same coin-flip with probability `p`. No comethylation. The no-signal baseline.
+- structured: a cell from a 2-state Markov chain. Adjacent CpGs tend to share their state, so there is real comethylation.
+- Markov-with-repeat process (used by both wcVI and acVI generators): each CpG is either copied from the previous CpG (with probability `p_repeat`) or sampled iid Bernoulli at the cell's target marginal `p`. `p_repeat = 0` is pure iid; `p_repeat = 0.95` produces long runs. Marginal `p` is preserved exactly by construction.
+- mean methylation on the x-axis is the fraction of methylated CpGs in the cell.
 
 The numbers behind every plot live as CSVs next to the PDFs and SVGs in `results/simulations/eval/`.
 
 # I_norm at zero baseline
 
-When cells have no comethylation (iid), I_norm is near zero across all methylation levels. When cells are structured, I_norm rises clearly. Normalising by `k_max · H(p̂)` flattens out the squeeze that I_total inherits from the marginal-entropy ceiling at extreme methylation.
+When cells have no comethylation (iid), I_norm is near zero across all methylation levels. When cells are structured, I_norm rises clearly. Normalising by `k_max * H(p_hat)` flattens out the squeeze that I_total inherits from the marginal-entropy ceiling at extreme methylation.
 
 ```{r p_decoupling, results = "asis"}
 show_plot("p_decoupling")
@@ -67,14 +67,14 @@ The marginal Shannon baseline cannot tell iid cells from structured ones at any 
 
 # Simulator sanity check
 
-This panel checks the **p_sweep simulator** — the simulator used by the I_norm-at-zero-baseline and the marginal-only-baseline sections. It is a 2-state Markov chain run at a target marginal `p` with two persistence regimes:
+This panel checks the p_sweep simulator, the simulator used by the I_norm-at-zero-baseline and the marginal-only-baseline sections. It is a 2-state Markov chain run at a target marginal `p` with two persistence regimes:
 
-- **iid cells**: persistence c = 0.5 (no comethylation; equivalent to drawing each CpG independently from Bernoulli(p)).
-- **structured cells**: persistence c = 0.85 at the same marginal `p` (long runs of the same state; strong comethylation).
+- iid cells: persistence c = 0.5 (no comethylation; equivalent to drawing each CpG independently from Bernoulli(p)).
+- structured cells: persistence c = 0.85 at the same marginal `p` (long runs of the same state; strong comethylation).
 
-For each `target_p ∈ {0.05, 0.10, ..., 0.95}` the generator writes 20 cells per condition. The sanity check verifies that the generator does what it claims: realised mean methylation should match `target_p` exactly (left panel, points on the diagonal), and per-cell I_1 should be small for iid and clearly positive for structured (right panel).
+For each `target_p in {0.05, 0.10, ..., 0.95}` the generator writes 20 cells per condition. The sanity check verifies that the generator does what it claims: realised mean methylation should match `target_p` exactly (left panel, points on the diagonal), and per-cell I_1 should be small for iid and clearly positive for structured (right panel).
 
-Note: this simulator is *not* the Markov-with-repeat process used by the wcVI and acVI sweeps — those have their own validation in the wcVI / acVI recovery sections.
+Note: this simulator is *not* the Markov-with-repeat process used by the wcVI and acVI sweeps; those have their own validation in the wcVI / acVI recovery sections.
 
 ```{r diagnostics, results = "asis"}
 show_plot("simulator_diagnostics")
@@ -82,11 +82,11 @@ show_plot("simulator_diagnostics")
 
 # I_k profile picks up the right correlation distance
 
-**I_k definition**. For a single cell, `I_k` is the mutual information between CpGs that sit `k` positions apart along the genome — that is, between `X_i` and `X_{i+k}` averaged over all valid pairs in the cell. It quantifies how much knowing one CpG's methylation reduces uncertainty about another CpG `k` positions further along. A cell whose CpGs at distance `k` are independent has `I_k = 0`; perfect dependence saturates `I_k` at the marginal entropy `H(p)`.
+I_k definition. For a single cell, `I_k` is the mutual information between CpGs that sit `k` positions apart along the genome, that is, between `X_i` and `X_{i+k}` averaged over all valid pairs in the cell. It quantifies how much knowing one CpG's methylation reduces uncertainty about another CpG `k` positions further along. A cell whose CpGs at distance `k` are independent has `I_k = 0`; perfect dependence saturates `I_k` at the marginal entropy `H(p)`.
 
-**I_total definition**. amet sums `I_k` across all lags from `1` to `--i-max-lag` (here `k_max = 20`). So `I_total = I_1 + I_2 + … + I_20`. It is the single scalar summary used as the within-cell score. A regular cell (long runs, periodic patterns) accumulates positive contributions across many lags → high `I_total`. An iid cell has `I_k ≈ 0` at every lag → `I_total ≈ 0`.
+I_total definition. amet sums `I_k` across all lags from `1` to `--i-max-lag` (here `k_max = 20`). So `I_total = I_1 + I_2 + ... + I_20`. It is the single scalar summary used as the within-cell score. A regular cell (long runs, periodic patterns) accumulates positive contributions across many lags, giving a high `I_total`. An iid cell has `I_k = 0` at every lag, so `I_total = 0`.
 
-**What this section tests**. Different patterns put their correlation at different lags. A Markov-style cell has its strongest dependency at lag 1 (each CpG most predicted by its neighbour), with weaker dependency at lag 2, 3, … . A period-3 sequence like `010010010` has *zero* mutual information at lag 1 (adjacent CpGs are anti-correlated, all three pairs `(0,1), (1,0), (0,0)` show up roughly equally) but *high* mutual information at lag 3 (every third CpG matches). The plot below shows `I_k` for `k = 1..6` for four kinds of cells: amet should produce a flat-zero profile for iid, a lag-1-dominated profile for markov, and a clear bump at lag 3 (resp. lag 5) for the period-3 (resp. period-5) cells.
+What this section tests. Different patterns put their correlation at different lags. A Markov-style cell has its strongest dependency at lag 1 (each CpG most predicted by its neighbour), with weaker dependency at lag 2, 3, ... . A period-3 sequence like `010010010` has *zero* mutual information at lag 1 (adjacent CpGs are anti-correlated, all three pairs `(0,1), (1,0), (0,0)` show up roughly equally) but *high* mutual information at lag 3 (every third CpG matches). The plot below shows `I_k` for `k = 1..6` for four kinds of cells: amet should produce a flat-zero profile for iid, a lag-1-dominated profile for markov, and a clear bump at lag 3 (resp. lag 5) for the period-3 (resp. period-5) cells.
 
 ```{r lag, results = "asis"}
 show_plot("lag_profile")
@@ -94,10 +94,10 @@ show_plot("lag_profile")
 
 What to look for:
 
-- **iid**: flat near zero at every lag.
-- **markov**: high at lag 1, decaying as k grows.
-- **period3**: a clear bump at lag 3.
-- **period5**: a clear bump at lag 5.
+- iid: flat near zero at every lag.
+- markov: high at lag 1, decaying as k grows.
+- period3: a clear bump at lag 3.
+- period5: a clear bump at lag 5.
 
 # I_norm holds up as coverage drops
 
@@ -119,13 +119,13 @@ show_plot("feature_length")
 
 # JSD grows with the number of cell types in the group
 
-This section uses the **mixture-of-Markov-chains** simulator (separate from the wcVI/acVI sweeps). Each "group" corresponds to one value of `K`, the number of distinct cell types mixed into it. A "cell type" here is one specific Markov chain (with its own persistence and marginal); a cell of that type is an independent realisation of that chain.
+This section uses the mixture-of-Markov-chains simulator (separate from the wcVI/acVI sweeps). Each "group" corresponds to one value of `K`, the number of distinct cell types mixed into it. A "cell type" here is one specific Markov chain (with its own persistence and marginal); a cell of that type is an independent realisation of that chain.
 
-- `K = 1`: every cell in the group comes from the same Markov chain → cells look the same → JSD ≈ 0.
-- `K = 2`: cells come from two different chains in equal proportion → cells split into two visually distinguishable populations → JSD > 0.
-- `K = 8`: cells come from eight different chains → many populations → JSD higher still.
+- `K = 1`: every cell in the group comes from the same Markov chain -> cells look the same -> JSD 0.
+- `K = 2`: cells come from two different chains in equal proportion -> cells split into two visually distinguishable populations -> JSD > 0.
+- `K = 8`: cells come from eight different chains -> many populations -> JSD higher still.
 
-JSD here measures how spread the per-cell L-mer histograms are within the group. More cell types means more histogram diversity means higher JSD. The sweep is `K ∈ {1, 2, 4, 8}`.
+JSD here measures how spread the per-cell L-mer histograms are within the group. More cell types means more histogram diversity means higher JSD. The sweep is `K in {1, 2, 4, 8}`.
 
 ```{r jsd_k, results = "asis"}
 show_plot("jsd_mixture_k")
@@ -151,9 +151,9 @@ This informs the recommended `--min-cells-per-group` setting in the CLI.
 
 # Recovery of within-cell variability index (wcVI)
 
-Each cell is an independent realisation of the Markov-with-repeat process at marginal `target_p`. wcVI sets the repeat probability: wcVI=1 → `p_repeat = 0.95` (long runs, very predictable cell), wcVI=10 → `p_repeat = 0` (pure iid Bernoulli, no within-cell structure). Marginal is held at `target_p` exactly; `target_p` is swept 0.05 → 0.95 in 0.05 steps so cells span the full methylation range at every wcVI level.
+Each cell is an independent realisation of the Markov-with-repeat process at marginal `target_p`. wcVI sets the repeat probability: wcVI=1 -> `p_repeat = 0.95` (long runs, very predictable cell), wcVI=10 -> `p_repeat = 0` (pure iid Bernoulli, no within-cell structure). Marginal is held at `target_p` exactly; `target_p` is swept 0.05 -> 0.95 in 0.05 steps so cells span the full methylation range at every wcVI level.
 
-The figure shows the marginal-normalised `I_norm = I_total / (k_max · H(p̂))` as the headline within-cell score, and per-group JSD as the across-cell score. NMI / Spearman / Kendall in the subtitle quantify recovery of the wcVI ranking. Negative correlation is expected: lower wcVI (more regular) → higher score.
+The figure shows the marginal-normalised `I_norm = I_total / (k_max * H(p_hat))` as the headline within-cell score, and per-group JSD as the across-cell score. NMI / Spearman / Kendall in the subtitle quantify recovery of the wcVI ranking. Negative correlation is expected: lower wcVI (more regular) -> higher score.
 
 ```{r wcvi, results = "asis"}
 show_plot("wcvi_recovery")
@@ -163,9 +163,9 @@ The marginal-vs-score panels (B, D) reveal whether the score is dominated by mea
 
 # Recovery of across-cell variability index (acVI)
 
-Each (acVI, target_p) group uses the same Markov-with-repeat process as wcVI, but `p_repeat` now varies from cell to cell within the group. The per-cell spread scales with acVI: acVI=1 → all cells share `p_repeat = 0.725`; acVI=10 → cells span `p_repeat ∈ [0.5, 0.95]`. Cells with different `p_repeat` have different L-mer histograms, so JSD across cells in the group grows with acVI.
+Each (acVI, target_p) group uses the same Markov-with-repeat process as wcVI, but `p_repeat` now varies from cell to cell within the group. The per-cell spread scales with acVI: acVI=1 -> all cells share `p_repeat = 0.725`; acVI=10 -> cells span `p_repeat in [0.5, 0.95]`. Cells with different `p_repeat` have different L-mer histograms, so JSD across cells in the group grows with acVI.
 
-Within each (acVI, target_p) group all cells share the same target marginal exactly, so JSD reflects only structural divergence — no marginal correction is needed for the simulator setup.
+Within each (acVI, target_p) group all cells share the same target marginal exactly, so JSD reflects only structural divergence; no marginal correction is needed for the simulator setup.
 
 ```{r acvi, results = "asis"}
 show_plot("acvi_recovery")
@@ -179,11 +179,11 @@ Combined figure comparing amet's scores (I_norm, JSD) on both wcVI and acVI grou
 show_plot("benchmark_summary")
 ```
 
-- Panels A–B: example cells at increasing wcVI / acVI levels at marginal p = 0.5.
+- Panels A-B: example cells at increasing wcVI / acVI levels at marginal p = 0.5.
 - Sanity-check 4-corner panel: cells at the four (wcVI, acVI) extremes.
-- Panels C–D: I_norm per cell vs methylation across wcVI; per-group JSD vs methylation across acVI.
-- Panels E–F: orthogonality response (JSD vs wcVI; I_norm vs acVI). With n_cpgs=2000 the orthogonality response is mostly flat; residual elevation at wcVI=1 is from finite-sample variance of long-run cells.
-- Panels G–H: NMI of recovery vs cells per group (subsampled), I_norm for wcVI; JSD for acVI.
+- Panels C-D: I_norm per cell vs methylation across wcVI; per-group JSD vs methylation across acVI.
+- Panels E-F: orthogonality response (JSD vs wcVI; I_norm vs acVI). With n_cpgs=2000 the orthogonality response is mostly flat; residual elevation at wcVI=1 is from finite-sample variance of long-run cells.
+- Panels G-H: NMI of recovery vs cells per group (subsampled), I_norm for wcVI; JSD for acVI.
 
 # Tool comparison: amet vs scMET vs epiCHAOS
 
@@ -197,7 +197,31 @@ CPU time and peak memory come from snakemake's `benchmark:` directive, recorded 
 
 Headline observations from the recovery panel:
 
-- **wcVI axis**: amet's `i_norm` recovers the true ranking near-perfectly. scMET's `epsilon` and `gamma` come close; scMET's `mu` is essentially uninformative because the wcVI sweep holds the marginal nearly fixed within each group. epiCHAOS's Jaccard-based `eITH` shows weak signal because Jaccard is largely blind to within-cell spatial structure.
-- **acVI axis**: amet's `jsd_norm` is the best recoverer. scMET cannot detect across-cell variability when marginals are held flat. epiCHAOS's `eITH` is near-zero because cells in the same acVI group share their marginal and the Jaccard distance collapses on permutation.
+- wcVI axis: amet's `i_norm` recovers the true ranking near-perfectly. scMET's `epsilon` and `gamma` come close; scMET's `mu` is essentially uninformative because the wcVI sweep holds the marginal nearly fixed within each group. epiCHAOS's Jaccard-based `eITH` shows weak signal because Jaccard is largely blind to within-cell spatial structure.
+- acVI axis: amet's `jsd_norm` is the best recoverer. scMET cannot detect across-cell variability when marginals are held flat. epiCHAOS's `eITH` is near-zero because cells in the same acVI group share their marginal and the Jaccard distance collapses on permutation.
 
-CPU and peak memory bars come from snakemake's `benchmark:` directive on each tool's run rule.
+The wcVI and acVI sweeps were designed around amet's scoring philosophy (within-cell spatial regularity and per-group L-mer divergence at fixed marginals), which makes them amet's home turf. To give each competitor its own home turf, the next two sections introduce supplementary sweeps tailored to scMET and epiCHAOS respectively.
+
+# Consensus-perturbation sweep (epiCHAOS-fair)
+
+Each of 10 groups (`pl = 1..10`) starts from a single consensus binary methylation pattern of length 2000 at marginal p = 0.5. Cells in the group are obtained by independently flipping each CpG at rate `flip_rate = (pl - 1) * 0.05`. At `pl = 1` cells are identical to the consensus; at `pl = 10` they are nearly independent of it. The consensus pattern is shared *positionally*, not just statistically, so this is the regime where Jaccard-distance-based heterogeneity (epiCHAOS's design) should excel. There is no within-cell spatial structure (no Markov persistence), so amet's I_norm is expected to sit near zero across all groups. amet's JSD on per-cell 2-mer histograms is expected to rise with drift then collapse at high flip rates, since cells converge to iid noise at p = 0.5 and their 2-mer histograms become indistinguishable.
+
+```{r consensus_perturbation, results = "asis"}
+show_plot("consensus_perturbation")
+```
+
+This sweep is included specifically to demonstrate an honest weakness of amet relative to epiCHAOS: when the heterogeneity signal is purely positional (cells share *which* CpGs are methylated, not just *how many*), a position-aware score like Jaccard wins. amet's L-mer-histogram view of within-feature heterogeneity is position-blind by construction.
+
+# Feature-variability sweep (scMET-fair)
+
+Each cell carries 100 features of 100 CpGs each (10,000 CpGs total per cell). Each feature `f` has a true beta-binomial dispersion `gamma_f` drawn from a 5-level grid `{0.05, 0.10, 0.20, 0.40, 0.80}`, with 20 features per level. Per cell, per feature: a per-cell-per-feature methylation rate `r_{cf}` is drawn from `Beta(mu_f, gamma_f)` with `mu_f = 0.5`, then 100 iid Bernoulli CpG calls are emitted at `r_{cf}`. There is no within-feature spatial structure. All 50 cells live in a single "all" group; recovery is measured per feature against `gamma_f`, not per group.
+
+This is scMET's native regime: many features per cell, feature-level overdispersion as the ground truth, no within-feature spatial pattern. amet's I_norm should be near zero for every feature. amet's per-feature JSD should rise with `gamma_f` because cells diverge in their per-cell rates. epiCHAOS is run with all 100 features as separate groups in a single call, so its rank-normalised `het.raw` produces a per-feature score; the per-feature output is then correlated against `gamma_f`.
+
+Caveat: amet's per-feature `i_norm` average shows a moderate positive Spearman against `gamma_f` in this sweep, but this is largely a numerical artefact rather than a structural signal. `i_norm = i_total / (k_max * H(p_hat))` divides by the marginal entropy `H(p_hat)`, which collapses to zero as the per-cell methylation rate approaches 0 or 1. At high `gamma_f` the per-cell rates are dispersed toward both extremes, so a fraction of cells land at near-zero `H(p_hat)` and produce inflated `i_norm` values that dominate the per-feature mean. The signal does not reflect within-cell spatial regularity (which is iid by construction in this sweep) and should be read as a denominator instability rather than a real recovery.
+
+```{r feature_variability, results = "asis"}
+show_plot("feature_variability")
+```
+
+CPU and peak memory bars in the consensus-perturbation and feature-variability panels come from snakemake's `benchmark:` directive on each tool's run rule.

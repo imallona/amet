@@ -1,0 +1,61 @@
+## Dataset analyses for amet (crc, ecker, argelaguet).
+##
+## Prototype mode runs a small subset; flip prototype.enabled to false for the
+## full run. Subsets are hardcoded so that runs are reproducible without
+## re-deriving cell selections.
+
+prototype:
+  enabled: true
+  cells_per_group: 10
+  features_subset: 200          # take first N intervals of each feature BED
+
+barbara:
+  host: barbara
+  user: imallona
+
+argelaguet:
+  run_name: argelaguet_proto
+  group_column: lineage10x
+  meta_remote: /home/imallona/src/yamet/workflow/argelaguet/sample_metadata.txt
+  cpg_level_remote: /home/imallona/src/yamet/workflow/argelaguet/met/cpg_level
+  features_remote: /home/imallona/src/yamet/workflow/argelaguet/features/genomic_contexts
+  assembly: mm10
+  window_size: 100000
+  proto_lineages:
+    - Epiblast
+    - Primitive_endoderm
+    - Nascent_mesoderm
+    - Rostral_neurectoderm
+
+ecker:
+  group_column: sub_type
+  raw_remote: /home/imallona/src/yamet/workflow/data/brain/raw
+  meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
+  assembly: mm10
+  region_filter: MOp
+  proto_cell_types:
+    - L23-IT
+    - L5-IT
+    - ASC-mid
+    - CGE-Vip-Ccser1
+
+crc:
+  group_column: location
+  raw_remote: /home/imallona/src/yamet/workflow/data/crc/raw
+  assembly: hg19
+  proto_patients:
+    - CRC01
+    - CRC02
+  proto_locations:
+    - NC
+    - PT
+    - LN
+
+amet:
+  i_max_lag: 3
+  min_cpgs_per_feature: 5
+  # prototype scope: lowered to 3 because chr19+200-feature subset gives
+  # at most a handful of covered cells per (peak, group). Set back to 10
+  # (or higher) for the full-scale run.
+  min_cells_per_group: 3
+  meth_call_threshold: 0.1

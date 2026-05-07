@@ -2,16 +2,22 @@
 ##
 ## Tasks:
 ##   simulations: full validation grid (10 evaluations across 8 simulation scenarios)
-##   ecker: TODO
-##   argelaguet: TODO
+##   argelaguet: render_argelaguet_report
+##   ecker:      TODO
+##   crc:        TODO
 
 import os.path as op
+import pandas as pd
 
 REPO_ROOT = op.dirname(workflow.basedir)
 RESULTS = op.join(REPO_ROOT, "results")
 AMET = op.join(REPO_ROOT, "method", "target", "release", "amet")
 
 configfile: op.join(workflow.basedir, "config", "sim.yaml")
+configfile: op.join(workflow.basedir, "config", "datasets.yaml")
+
+include: op.join("rules", "common.smk")
+include: op.join("rules", "argelaguet.smk")
 
 SIM = op.join(RESULTS, "simulations")
 
@@ -29,9 +35,15 @@ EVAL_OUTPUTS = [
     op.join(SIM, "eval", "acvi_recovery.pdf"),
     op.join(SIM, "eval", "benchmark_summary.pdf"),
     op.join(SIM, "eval", "tool_comparison.pdf"),
+    op.join(SIM, "eval", "consensus_perturbation.pdf"),
+    op.join(SIM, "eval", "feature_variability.pdf"),
 ]
 
 SIM_REPORT_HTML = op.join(SIM, "simulations_report.html")
+
+
+ARG_REPORT_HTML = op.join(RESULTS, config["argelaguet"]["run_name"],
+                          config["argelaguet"]["run_name"] + ".html")
 
 
 rule all:
@@ -40,6 +52,10 @@ rule all:
 
 rule simulations:
     input: SIM_REPORT_HTML
+
+
+rule argelaguet:
+    input: ARG_REPORT_HTML
 
 
 rule render_simulations_report:
@@ -54,13 +70,6 @@ rule render_simulations_report:
         r"""
         Rscript -e 'rmarkdown::render("{input.rmd}", output_file="simulations_report.html", output_dir="{params.out_dir}", params=list(eval_dir="{params.eval_dir}"), quiet=TRUE)'
         """
-
-
-rule build_amet:
-    output:
-        binary = AMET,
-    shell:
-        "cd {REPO_ROOT}/method && cargo build --release"
 
 
 # ----- p sweep -----
@@ -102,12 +111,14 @@ rule run_amet_p_sweep:
         prefix = op.join(SIM, "amet", "p_sweep", "p_sweep"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
+        min_cells = config["amet"]["min_cells_per_group"],
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group {params.min_cells}
         """
 
 
@@ -169,12 +180,14 @@ rule run_amet_lag_profile:
     params:
         prefix = op.join(SIM, "amet", "lag_profile", "lag_profile"),
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
+        min_cells = config["amet"]["min_cells_per_group"],
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag 6 --min-cpgs-per-feature {params.min_cpgs}
+            --i-max-lag 6 --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group {params.min_cells}
         """
 
 
@@ -216,12 +229,14 @@ rule run_amet_sparsity_sweep:
     params:
         prefix = op.join(SIM, "amet", "sparsity_sweep", "sparsity_sweep"),
         i_max_lag = config["amet"]["i_max_lag"],
+        min_cells = config["amet"]["min_cells_per_group"],
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 3
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 3 \
+            --min-cells-per-group {params.min_cells}
         """
 
 
@@ -263,12 +278,14 @@ rule run_amet_feature_length_sweep:
     params:
         prefix = op.join(SIM, "amet", "feature_length_sweep", "feature_length_sweep"),
         i_max_lag = config["amet"]["i_max_lag"],
+        min_cells = config["amet"]["min_cells_per_group"],
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 3
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 3 \
+            --min-cells-per-group {params.min_cells}
         """
 
 
@@ -311,12 +328,14 @@ rule run_amet_mixture_k_sweep:
         prefix = op.join(SIM, "amet", "mixture_k_sweep", "mixture_k_sweep"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
+        min_cells = config["amet"]["min_cells_per_group"],
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group {params.min_cells}
         """
 
 
@@ -359,12 +378,14 @@ rule run_amet_mixture_divergence_sweep:
         prefix = op.join(SIM, "amet", "mixture_divergence_sweep", "mixture_divergence_sweep"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
+        min_cells = config["amet"]["min_cells_per_group"],
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group {params.min_cells}
         """
 
 
@@ -412,7 +433,8 @@ rule run_amet_n_cells_sweep:
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group 1
         """
 
 
@@ -454,6 +476,7 @@ rule run_amet_wcvi_sweep:
         pair_counts = op.join(SIM, "amet", "wcvi_sweep", "wcvi_sweep.pair_counts.tsv.gz"),
     params:
         prefix = op.join(SIM, "amet", "wcvi_sweep", "wcvi_sweep"),
+        min_cells = config["amet"]["min_cells_per_group"],
     benchmark: op.join(SIM, "benchmarks", "run_amet_wcvi_sweep.tsv")
     log: op.join(SIM, "logs", "run_amet_wcvi_sweep.log")
     shell:
@@ -461,7 +484,8 @@ rule run_amet_wcvi_sweep:
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag 20 --min-cpgs-per-feature 5 &> {log}
+            --i-max-lag 20 --min-cpgs-per-feature 5 \
+            --min-cells-per-group {params.min_cells} &> {log}
         """
 
 
@@ -507,6 +531,7 @@ rule run_amet_acvi_sweep:
         pair_counts = op.join(SIM, "amet", "acvi_sweep", "acvi_sweep.pair_counts.tsv.gz"),
     params:
         prefix = op.join(SIM, "amet", "acvi_sweep", "acvi_sweep"),
+        min_cells = config["amet"]["min_cells_per_group"],
     benchmark: op.join(SIM, "benchmarks", "run_amet_acvi_sweep.tsv")
     log: op.join(SIM, "logs", "run_amet_acvi_sweep.log")
     shell:
@@ -514,7 +539,8 @@ rule run_amet_acvi_sweep:
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag 20 --min-cpgs-per-feature 5 &> {log}
+            --i-max-lag 20 --min-cpgs-per-feature 5 \
+            --min-cells-per-group {params.min_cells} &> {log}
         """
 
 
@@ -557,6 +583,18 @@ rule eval_benchmark_summary:
 # compare runtime / footprint across amet, scMET, epiCHAOS in eval_tool_comparison.
 
 R_TOOLS_ENV = op.join(REPO_ROOT, "workflow", "envs", "r-tools.yml")
+EPICHAOS_FLAG = op.join(SIM, "flags", "epichaos_installed.flag")
+
+
+rule install_epichaos:
+    output: EPICHAOS_FLAG
+    conda: R_TOOLS_ENV
+    log: op.join(SIM, "logs", "install_epichaos.log")
+    shell:
+        """
+        Rscript workflow/scripts/install_epichaos.R --sentinel {output} &> {log}
+        """
+
 
 rule run_scmet_wcvi:
     input: cell_feature = op.join(SIM, "amet", "wcvi_sweep", "wcvi_sweep.cell_feature.tsv.gz"),
@@ -588,30 +626,36 @@ rule run_epichaos_wcvi:
     input:
         manifest = op.join(SIM, "data", "wcvi_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "wcvi_sweep", "cpgs.tsv"),
+        github_flag = EPICHAOS_FLAG,
     output: op.join(SIM, "epichaos", "wcvi_sweep.epichaos.tsv")
     threads: 4
     conda: R_TOOLS_ENV
     benchmark: op.join(SIM, "benchmarks", "run_epichaos_wcvi.tsv")
     log: op.join(SIM, "logs", "run_epichaos_wcvi.log")
     shell:
-        "Rscript workflow/scripts/run_epichaos.R "
-        "--manifest {input.manifest} --cpg_reference {input.cpgs} "
-        "--output {output} --threads {threads} &> {log}"
+        """
+        Rscript workflow/scripts/run_epichaos.R \
+            --manifest {input.manifest} --cpg_reference {input.cpgs} \
+            --output {output} --threads {threads} &> {log}
+        """
 
 
 rule run_epichaos_acvi:
     input:
         manifest = op.join(SIM, "data", "acvi_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "acvi_sweep", "cpgs.tsv"),
+        github_flag = EPICHAOS_FLAG,
     output: op.join(SIM, "epichaos", "acvi_sweep.epichaos.tsv")
     threads: 4
     conda: R_TOOLS_ENV
     benchmark: op.join(SIM, "benchmarks", "run_epichaos_acvi.tsv")
     log: op.join(SIM, "logs", "run_epichaos_acvi.log")
     shell:
-        "Rscript workflow/scripts/run_epichaos.R "
-        "--manifest {input.manifest} --cpg_reference {input.cpgs} "
-        "--output {output} --threads {threads} &> {log}"
+        """
+        Rscript workflow/scripts/run_epichaos.R \
+            --manifest {input.manifest} --cpg_reference {input.cpgs} \
+            --output {output} --threads {threads} &> {log}
+        """
 
 
 rule eval_tool_comparison:
@@ -643,3 +687,209 @@ rule eval_tool_comparison:
         "--wcvi_scmet_bench {input.wcvi_scmet_bench} --acvi_scmet_bench {input.acvi_scmet_bench} "
         "--wcvi_epichaos_bench {input.wcvi_epichaos_bench} --acvi_epichaos_bench {input.acvi_epichaos_bench} "
         "--output_prefix {params.prefix} &> {log}"
+
+
+# ----- consensus_perturbation_sweep (epiCHAOS-fair benchmark) -----
+# Cells in a group share a consensus methylation pattern; per-cell CpG flips at
+# rate (pl-1)*0.05 produce position-aware divergence, the regime epiCHAOS targets.
+
+rule generate_consensus_perturbation_sweep:
+    output:
+        manifest = op.join(SIM, "data", "consensus_perturbation_sweep", "manifest.tsv"),
+        cpgs = op.join(SIM, "data", "consensus_perturbation_sweep", "cpgs.tsv"),
+        bed = op.join(SIM, "data", "consensus_perturbation_sweep", "feature.bed"),
+    params:
+        out_dir = op.join(SIM, "data", "consensus_perturbation_sweep"),
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_consensus_perturbation_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_consensus_perturbation:
+    input:
+        manifest = op.join(SIM, "data", "consensus_perturbation_sweep", "manifest.tsv"),
+        cpgs = op.join(SIM, "data", "consensus_perturbation_sweep", "cpgs.tsv"),
+        bed = op.join(SIM, "data", "consensus_perturbation_sweep", "feature.bed"),
+        binary = AMET,
+    output:
+        cell_feature = op.join(SIM, "amet", "consensus_perturbation_sweep", "consensus_perturbation_sweep.cell_feature.tsv.gz"),
+        feature = op.join(SIM, "amet", "consensus_perturbation_sweep", "consensus_perturbation_sweep.feature.tsv.gz"),
+    params:
+        prefix = op.join(SIM, "amet", "consensus_perturbation_sweep", "consensus_perturbation_sweep"),
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cells = config["amet"]["min_cells_per_group"],
+    benchmark: op.join(SIM, "benchmarks", "run_amet_consensus_perturbation.tsv")
+    log: op.join(SIM, "logs", "run_amet_consensus_perturbation.log")
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 5 \
+            --min-cells-per-group {params.min_cells} &> {log}
+        """
+
+
+rule run_scmet_consensus_perturbation:
+    input: cell_feature = op.join(SIM, "amet", "consensus_perturbation_sweep", "consensus_perturbation_sweep.cell_feature.tsv.gz"),
+    output: op.join(SIM, "scmet", "consensus_perturbation.scmet.tsv")
+    threads: 4
+    conda: R_TOOLS_ENV
+    benchmark: op.join(SIM, "benchmarks", "run_scmet_consensus_perturbation.tsv")
+    log: op.join(SIM, "logs", "run_scmet_consensus_perturbation.log")
+    shell:
+        """
+        Rscript workflow/scripts/run_scmet.R \
+            --cell_feature {input.cell_feature} --output {output} \
+            --threads {threads} &> {log}
+        """
+
+
+rule run_epichaos_consensus_perturbation:
+    input:
+        manifest = op.join(SIM, "data", "consensus_perturbation_sweep", "manifest.tsv"),
+        cpgs = op.join(SIM, "data", "consensus_perturbation_sweep", "cpgs.tsv"),
+        github_flag = EPICHAOS_FLAG,
+    output: op.join(SIM, "epichaos", "consensus_perturbation.epichaos.tsv")
+    threads: 4
+    conda: R_TOOLS_ENV
+    benchmark: op.join(SIM, "benchmarks", "run_epichaos_consensus_perturbation.tsv")
+    log: op.join(SIM, "logs", "run_epichaos_consensus_perturbation.log")
+    shell:
+        """
+        Rscript workflow/scripts/run_epichaos.R \
+            --manifest {input.manifest} --cpg_reference {input.cpgs} \
+            --output {output} --threads {threads} &> {log}
+        """
+
+
+rule eval_consensus_perturbation:
+    input:
+        cell_feature = op.join(SIM, "amet", "consensus_perturbation_sweep", "consensus_perturbation_sweep.cell_feature.tsv.gz"),
+        feature = op.join(SIM, "amet", "consensus_perturbation_sweep", "consensus_perturbation_sweep.feature.tsv.gz"),
+        scmet = op.join(SIM, "scmet", "consensus_perturbation.scmet.tsv"),
+        epichaos = op.join(SIM, "epichaos", "consensus_perturbation.epichaos.tsv"),
+        amet_bench = op.join(SIM, "benchmarks", "run_amet_consensus_perturbation.tsv"),
+        scmet_bench = op.join(SIM, "benchmarks", "run_scmet_consensus_perturbation.tsv"),
+        epichaos_bench = op.join(SIM, "benchmarks", "run_epichaos_consensus_perturbation.tsv"),
+    output: op.join(SIM, "eval", "consensus_perturbation.pdf")
+    params: prefix = op.join(SIM, "eval", "consensus_perturbation")
+    log: op.join(SIM, "logs", "eval_consensus_perturbation.log")
+    shell:
+        """
+        Rscript workflow/scripts/eval_consensus_perturbation.R \
+            --cell_feature {input.cell_feature} --feature {input.feature} \
+            --scmet {input.scmet} --epichaos {input.epichaos} \
+            --amet_bench {input.amet_bench} --scmet_bench {input.scmet_bench} \
+            --epichaos_bench {input.epichaos_bench} \
+            --output_prefix {params.prefix} &> {log}
+        """
+
+
+# ----- feature_variability_sweep (scMET-fair benchmark) -----
+# Each cell carries many features (default 100 features x 100 CpGs = 10,000 CpGs);
+# per-feature dispersion gamma_f is the ground truth, drawn from a 5-level grid.
+# Cells are not grouped (single 'all' group); recovery is per feature.
+
+rule generate_feature_variability_sweep:
+    output:
+        manifest = op.join(SIM, "data", "feature_variability_sweep", "manifest.tsv"),
+        cpgs = op.join(SIM, "data", "feature_variability_sweep", "cpgs.tsv"),
+        bed = op.join(SIM, "data", "feature_variability_sweep", "feature.bed"),
+        ground_truth = op.join(SIM, "data", "feature_variability_sweep", "ground_truth.tsv"),
+    params:
+        out_dir = op.join(SIM, "data", "feature_variability_sweep"),
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_feature_variability_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_feature_variability:
+    input:
+        manifest = op.join(SIM, "data", "feature_variability_sweep", "manifest.tsv"),
+        cpgs = op.join(SIM, "data", "feature_variability_sweep", "cpgs.tsv"),
+        bed = op.join(SIM, "data", "feature_variability_sweep", "feature.bed"),
+        binary = AMET,
+    output:
+        cell_feature = op.join(SIM, "amet", "feature_variability_sweep", "feature_variability_sweep.cell_feature.tsv.gz"),
+        feature = op.join(SIM, "amet", "feature_variability_sweep", "feature_variability_sweep.feature.tsv.gz"),
+    params:
+        prefix = op.join(SIM, "amet", "feature_variability_sweep", "feature_variability_sweep"),
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cells = config["amet"]["min_cells_per_group"],
+    benchmark: op.join(SIM, "benchmarks", "run_amet_feature_variability.tsv")
+    log: op.join(SIM, "logs", "run_amet_feature_variability.log")
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 5 \
+            --min-cells-per-group {params.min_cells} &> {log}
+        """
+
+
+rule run_scmet_feature_variability:
+    input: cell_feature = op.join(SIM, "amet", "feature_variability_sweep", "feature_variability_sweep.cell_feature.tsv.gz"),
+    output: op.join(SIM, "scmet", "feature_variability.scmet.tsv")
+    threads: 4
+    conda: R_TOOLS_ENV
+    benchmark: op.join(SIM, "benchmarks", "run_scmet_feature_variability.tsv")
+    log: op.join(SIM, "logs", "run_scmet_feature_variability.log")
+    shell:
+        """
+        Rscript workflow/scripts/run_scmet.R \
+            --cell_feature {input.cell_feature} --output {output} \
+            --feature_column feature_id --threads {threads} &> {log}
+        """
+
+
+rule run_epichaos_feature_variability:
+    input:
+        manifest = op.join(SIM, "data", "feature_variability_sweep", "manifest.tsv"),
+        cpgs = op.join(SIM, "data", "feature_variability_sweep", "cpgs.tsv"),
+        bed = op.join(SIM, "data", "feature_variability_sweep", "feature.bed"),
+        github_flag = EPICHAOS_FLAG,
+    output: op.join(SIM, "epichaos", "feature_variability.epichaos.tsv")
+    threads: 4
+    conda: R_TOOLS_ENV
+    benchmark: op.join(SIM, "benchmarks", "run_epichaos_feature_variability.tsv")
+    log: op.join(SIM, "logs", "run_epichaos_feature_variability.log")
+    shell:
+        """
+        Rscript workflow/scripts/run_epichaos_per_feature.R \
+            --manifest {input.manifest} --cpg_reference {input.cpgs} \
+            --bed {input.bed} \
+            --output {output} --threads {threads} &> {log}
+        """
+
+
+rule eval_feature_variability:
+    input:
+        cell_feature = op.join(SIM, "amet", "feature_variability_sweep", "feature_variability_sweep.cell_feature.tsv.gz"),
+        feature = op.join(SIM, "amet", "feature_variability_sweep", "feature_variability_sweep.feature.tsv.gz"),
+        ground_truth = op.join(SIM, "data", "feature_variability_sweep", "ground_truth.tsv"),
+        scmet = op.join(SIM, "scmet", "feature_variability.scmet.tsv"),
+        epichaos = op.join(SIM, "epichaos", "feature_variability.epichaos.tsv"),
+        amet_bench = op.join(SIM, "benchmarks", "run_amet_feature_variability.tsv"),
+        scmet_bench = op.join(SIM, "benchmarks", "run_scmet_feature_variability.tsv"),
+        epichaos_bench = op.join(SIM, "benchmarks", "run_epichaos_feature_variability.tsv"),
+    output: op.join(SIM, "eval", "feature_variability.pdf")
+    params: prefix = op.join(SIM, "eval", "feature_variability")
+    log: op.join(SIM, "logs", "eval_feature_variability.log")
+    shell:
+        """
+        Rscript workflow/scripts/eval_feature_variability.R \
+            --cell_feature {input.cell_feature} --feature {input.feature} \
+            --ground_truth {input.ground_truth} \
+            --scmet {input.scmet} --epichaos {input.epichaos} \
+            --amet_bench {input.amet_bench} --scmet_bench {input.scmet_bench} \
+            --epichaos_bench {input.epichaos_bench} \
+            --output_prefix {params.prefix} &> {log}
+        """

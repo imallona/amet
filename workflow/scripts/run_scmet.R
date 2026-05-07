@@ -16,6 +16,8 @@ suppressPackageStartupMessages({
 options <- list(
     make_option(c("--cell_feature"), type = "character"),
     make_option(c("--output"), type = "character"),
+    make_option(c("--feature_column"), type = "character", default = "group",
+                help = "Column to use as scMET 'Feature'. 'group' (default) treats each cell group as a scMET feature; 'feature_id' treats each genomic feature as a scMET feature."),
     make_option(c("--iter"), type = "integer", default = 5000),
     make_option(c("--L"), type = "integer", default = 4,
                 help = "Number of basis functions for the mu-gamma trend"),
@@ -27,10 +29,10 @@ opt <- parse_args(OptionParser(option_list = options))
 df <- fread(opt$cell_feature, header = TRUE, sep = "\t", na.strings = "NA")
 df <- df[!is.na(n_ones) & !is.na(n_zeros) & (n_ones + n_zeros) > 0L]
 
-## In our simulator each cell sits in exactly one (acvi/wcvi, target_p) group, so
-## the natural scMET "feature" is the group identifier. With 19 target_p × 10 acvi
-## (or 10 wcvi) × ~30 cells, scMET sees ~190 features each with ~30 observations.
-scmet_Y <- df[, .(Feature = group,
+if (!opt$feature_column %in% names(df)) {
+    stop(sprintf("feature_column '%s' not in cell_feature.tsv columns", opt$feature_column))
+}
+scmet_Y <- df[, .(Feature = get(opt$feature_column),
                   Cell = cell_id,
                   total_reads = as.integer(n_ones + n_zeros),
                   met_reads = as.integer(n_ones))]

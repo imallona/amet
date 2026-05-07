@@ -3,7 +3,7 @@
 ## by construction:
 ##   - wcVI cells come from `simulate_repeat_cell` (independent realisations of a
 ##     Markov-with-repeat process at marginal target_p, regularity = p_repeat).
-##     Each cell is independent → across-cell variability is finite-sample noise,
+##     Each cell is independent -> across-cell variability is finite-sample noise,
 ##     not a function of wcVI.
 ##   - acVI cells use templated bricks (one brick per cell, repeated). Templates
 ##     have very different L-mer signatures so JSD has dynamic range across the
@@ -13,8 +13,8 @@
 
 ## Each CpG either copies the previous one (prob p_repeat) or is sampled iid
 ## Bernoulli at target_p. Stationary marginal = target_p exactly.
-##   p_repeat = 0   → pure iid Bernoulli at target_p (no within-cell structure).
-##   p_repeat = 0.95 → long runs of the same state.
+##   p_repeat = 0   -> pure iid Bernoulli at target_p (no within-cell structure).
+##   p_repeat = 0.95 -> long runs of the same state.
 simulate_repeat_cell <- function(n_cpgs, target_p, p_repeat) {
     bits <- integer(n_cpgs)
     bits[1] <- as.integer(runif(1) < target_p)

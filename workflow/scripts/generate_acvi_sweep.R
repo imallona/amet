@@ -4,7 +4,7 @@
 ## comparable). The difference is what scales with the index:
 ##   - wcVI: p_repeat varies WITH the index (per cell, all cells in a group share).
 ##   - acVI: p_repeat varies WITHIN the group; the per-cell spread scales with
-##           acVI. acVI=1 → all cells share p_repeat=0.725; acVI=10 → cells span
+##           acVI. acVI=1 -> all cells share p_repeat=0.725; acVI=10 -> cells span
 ##           p_repeat uniformly across [0.5, 0.95].
 ##
 ## Each cell is an independent realisation, marginal pinned to target_p exactly

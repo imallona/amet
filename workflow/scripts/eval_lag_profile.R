@@ -1,5 +1,5 @@
-## I_k profile across patterns: iid → flat near zero, AR(1) → I_1 high then decay,
-## period_k → spike at lag k.
+## I_k profile across patterns: iid -> flat near zero, AR(1) -> I_1 high then decay,
+## period_k -> spike at lag k.
 
 suppressPackageStartupMessages({
     library(optparse); library(ggplot2); library(dplyr); library(tidyr)

@@ -121,7 +121,7 @@ fn end_to_end_two_cells_one_feature_allc() {
 
 #[test]
 fn iid_cells_have_low_i_total_at_any_p() {
-    // Synthesize cells whose calls are independent draws at marginal p ≈ 0.5
+    // Synthesize cells whose calls are independent draws at marginal p ~ 0.5
     // and verify i_total is small. We approximate by a deterministic balanced sequence
     // with no comethylation: 000111000111 (low lag-1 MI when shuffled, but 010011000110
     // is closer to iid).
@@ -176,7 +176,7 @@ fn iid_cells_have_low_i_total_at_any_p() {
     let i_total_col = header.split('\t').position(|h| h == "i_total").unwrap();
     let i_total: f64 = row[i_total_col].parse().unwrap();
 
-    // Sanity check rather than strict bound — small finite sample, MM correction adds noise.
+    // Sanity check rather than strict bound: small finite sample, MM correction adds noise.
     assert!(
         i_total < 1.5,
         "expected pseudo-iid sequence to have low I_total, got {}",
@@ -191,4 +191,184 @@ fn read_gz(path: &std::path::Path) -> String {
     let mut s = String::new();
     MultiGzDecoder::new(f).read_to_string(&mut s).unwrap();
     s
+}
+
+#[test]
+fn end_to_end_with_genome_flag() {
+    // FASTA -> amet derives the CpG index, writes <fasta>.cpg, then runs.
+    // Six CpGs on chr1 at positions 9, 19, 29, 39, 49, 59 (0-based).
+    let dir = tempdir().unwrap();
+    let mut fa = String::from(">chr1\n");
+    for i in 0..60 {
+        if i == 9 || i == 19 || i == 29 || i == 39 || i == 49 || i == 59 {
+            fa.push('C');
+        } else if i == 10 || i == 20 || i == 30 || i == 40 || i == 50 || i == 60 {
+            fa.push('G');
+        } else {
+            fa.push('A');
+        }
+    }
+    fa.push('\n');
+    let fa_path = write_file(dir.path(), "tiny.fa", &fa);
+    let bed = write_file(dir.path(), "feat.bed", "chr1\t0\t100\tregion1\n");
+
+    let cell = write_file(
+        dir.path(),
+        "cellA.allc.tsv",
+        "chr1\t10\t+\tCGN\t0\t1\t0\n\
+         chr1\t20\t+\tCGN\t1\t1\t1\n\
+         chr1\t30\t+\tCGN\t0\t1\t0\n\
+         chr1\t40\t+\tCGN\t1\t1\t1\n\
+         chr1\t50\t+\tCGN\t0\t1\t0\n\
+         chr1\t60\t+\tCGN\t1\t1\t1\n",
+    );
+    let manifest = write_file(
+        dir.path(),
+        "cells.tsv",
+        &format!("cell_id\tgroup\tpath\nA\tg1\t{}\n", cell.display()),
+    );
+    let prefix = dir.path().join("run1");
+    let status = Command::new(binary_path())
+        .args([
+            "--genome",
+            fa_path.to_str().unwrap(),
+            "--features",
+            bed.to_str().unwrap(),
+            "--cells",
+            manifest.to_str().unwrap(),
+            "--output-prefix",
+            prefix.to_str().unwrap(),
+            "--min-cpgs-per-feature",
+            "3",
+        ])
+        .status()
+        .expect("running amet binary");
+    assert!(status.success(), "amet exited with non-zero status");
+
+    // The CpG index sidecar must exist next to the FASTA.
+    let mut cpg_index = fa_path.clone();
+    let mut s = cpg_index.into_os_string();
+    s.push(".cpg");
+    cpg_index = PathBuf::from(s);
+    assert!(
+        cpg_index.exists(),
+        "expected sidecar at {}",
+        cpg_index.display()
+    );
+
+    let cf = read_gz(&dir.path().join("run1.cell_feature.tsv.gz"));
+    let lines: Vec<&str> = cf.lines().collect();
+    assert_eq!(lines.len(), 2, "header + 1 cell, got {}", lines.len());
+}
+
+#[test]
+fn cli_rejects_both_genome_and_cpg_reference() {
+    let dir = tempdir().unwrap();
+    let bed = write_file(dir.path(), "f.bed", "chr1\t0\t10\tx\n");
+    let cells = write_file(dir.path(), "c.tsv", "cell_id\tgroup\tpath\n");
+    let cpgs = write_file(dir.path(), "cpgs.tsv", "chr1\t0\n");
+    let fa = write_file(dir.path(), "g.fa", ">chr1\nA\n");
+    let prefix = dir.path().join("p");
+    let status = Command::new(binary_path())
+        .args([
+            "--genome",
+            fa.to_str().unwrap(),
+            "--cpg-reference",
+            cpgs.to_str().unwrap(),
+            "--features",
+            bed.to_str().unwrap(),
+            "--cells",
+            cells.to_str().unwrap(),
+            "--output-prefix",
+            prefix.to_str().unwrap(),
+        ])
+        .status()
+        .expect("running amet binary");
+    assert!(
+        !status.success(),
+        "expected non-zero exit when both flags given"
+    );
+}
+
+#[test]
+fn mixed_chrom_naming_still_runs() {
+    // UCSC-style FASTA (chr1) but Ensembl-style cell + BED (1). Should resolve transparently.
+    let dir = tempdir().unwrap();
+    let mut fa = String::from(">chr1\n");
+    for i in 0..60 {
+        let c = if [9u64, 19, 29, 39, 49, 59].contains(&(i as u64)) {
+            'C'
+        } else if [10u64, 20, 30, 40, 50, 60].contains(&(i as u64)) {
+            'G'
+        } else {
+            'A'
+        };
+        fa.push(c);
+    }
+    fa.push('\n');
+    let fa_path = write_file(dir.path(), "tiny.fa", &fa);
+    // BED uses Ensembl naming.
+    let bed = write_file(dir.path(), "feat.bed", "1\t0\t100\tregion1\n");
+    // Cell allc uses Ensembl naming.
+    let cell = write_file(
+        dir.path(),
+        "cellA.allc.tsv",
+        "1\t10\t+\tCGN\t0\t1\t0\n\
+         1\t20\t+\tCGN\t1\t1\t1\n\
+         1\t30\t+\tCGN\t0\t1\t0\n\
+         1\t40\t+\tCGN\t1\t1\t1\n\
+         1\t50\t+\tCGN\t0\t1\t0\n\
+         1\t60\t+\tCGN\t1\t1\t1\n",
+    );
+    let manifest = write_file(
+        dir.path(),
+        "cells.tsv",
+        &format!("cell_id\tgroup\tpath\nA\tg1\t{}\n", cell.display()),
+    );
+    let prefix = dir.path().join("run1");
+    let status = Command::new(binary_path())
+        .args([
+            "--genome",
+            fa_path.to_str().unwrap(),
+            "--features",
+            bed.to_str().unwrap(),
+            "--cells",
+            manifest.to_str().unwrap(),
+            "--output-prefix",
+            prefix.to_str().unwrap(),
+            "--min-cpgs-per-feature",
+            "3",
+        ])
+        .status()
+        .expect("running amet binary");
+    assert!(
+        status.success(),
+        "amet should resolve mixed-naming inputs without complaint"
+    );
+    let cf = read_gz(&dir.path().join("run1.cell_feature.tsv.gz"));
+    let lines: Vec<&str> = cf.lines().collect();
+    assert_eq!(lines.len(), 2, "header + 1 cell, got {}", lines.len());
+}
+
+#[test]
+fn cli_rejects_neither_genome_nor_cpg_reference() {
+    let dir = tempdir().unwrap();
+    let bed = write_file(dir.path(), "f.bed", "chr1\t0\t10\tx\n");
+    let cells = write_file(dir.path(), "c.tsv", "cell_id\tgroup\tpath\n");
+    let prefix = dir.path().join("p");
+    let status = Command::new(binary_path())
+        .args([
+            "--features",
+            bed.to_str().unwrap(),
+            "--cells",
+            cells.to_str().unwrap(),
+            "--output-prefix",
+            prefix.to_str().unwrap(),
+        ])
+        .status()
+        .expect("running amet binary");
+    assert!(
+        !status.success(),
+        "expected non-zero exit when neither flag given"
+    );
 }

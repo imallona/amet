@@ -1,0 +1,7 @@
+name: amet-rust
+channels:
+  - conda-forge
+dependencies:
+  - rust>=1.80
+  - clang
+  - pkg-config

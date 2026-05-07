@@ -4,8 +4,8 @@ amet is a tool to quantify within- and across-cells epigenetic heterogeneity usi
 
 It produces two complementary scores:
 
-- **Within-cell regularity** along consecutive CpGs in one cell, scored by `I_total`, the sum of mutual information across CpG lags 1..k.
-- **Across-cell heterogeneity** at a feature within a cell group, scored by `JSD` on per-cell L-mer distributions.
+- Within-cell regularity along consecutive CpGs in one cell, scored by `I_total`, the sum of mutual information across CpG lags 1..k.
+- Across-cell heterogeneity at a feature within a cell group, scored by `JSD` on per-cell lag-1 2-mer distributions.
 
 A sequence with no comethylation structure scores zero regardless of its methylation level, so no marginal-methylation adjustment is needed.
 
@@ -17,21 +17,22 @@ Early prototype (v0.1).
 
 ```
 amet/
-├── method/                    Rust crate (the amet binary and library)
-│   ├── Cargo.toml
-│   ├── src/                   parsers, scores, CLI, I/O
-│   └── tests/                 integration tests
-├── workflow/                  Snakemake workflow for simulations and dataset analyses
-│   ├── Snakefile
-│   ├── config/sim.yaml        simulation parameters
-│   ├── envs/r.yml             conda env for the R scripts
-│   ├── scripts/               R scripts (data generation, evaluation)
-│   └── Rmd/                   reports
-├── results/                   gitignored: outputs of running the workflow
-├── .github/workflows/         CI definitions
-├── README.md
-├── LICENSE
-└── AUTHORS
+  method/                    Rust crate (the amet binary and library)
+    Cargo.toml
+    src/                     parsers, scores, CLI, I/O
+    tests/                   integration tests
+  workflow/                  Snakemake workflow for simulations and dataset analyses
+    Snakefile
+    config/sim.yaml          simulation parameters
+    config/datasets.yaml     dataset paths and prototype subsets
+    envs/                    conda envs (rust, bedtools, r-tools, python)
+    scripts/                 R / Python / shell helpers
+    Rmd/                     reports
+  results/                   gitignored: outputs of running the workflow
+  .github/workflows/         CI definitions
+  README.md
+  LICENSE
+  AUTHORS
 ```
 
 ## Build
@@ -47,7 +48,7 @@ The binary lives at `method/target/release/amet`.
 
 ```
 amet \
-  --cpg-reference cpgs.tsv.gz \
+  --genome mm10.fa \
   --cells cells.tsv \
   --features features.bed \
   --output-prefix run1
@@ -55,18 +56,22 @@ amet \
 
 Outputs land at `run1.cell_feature.tsv.gz` and `run1.feature.tsv.gz`.
 
+On the first run amet derives every CpG position from the FASTA and writes a sidecar `mm10.fa.cpg` next to the input. Subsequent runs reuse the sidecar. If you already have a CpG list, pass `--cpg-reference cpgs.tsv.gz` instead. Exactly one of `--genome` or `--cpg-reference` is required.
+
 ## CLI
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `--cpg-reference` | yes | — | Tab-separated `chrom\tpos` of every CpG to consider, 0-based. Defines adjacency: any uncovered reference CpG breaks 2-mer pairing across it. |
-| `--cells` | yes | — | Manifest TSV (see below). |
-| `--features` | yes | — | Standard BED file of regions to score. Features should not overlap. |
-| `--output-prefix` | yes | — | Prefix for the two output files. |
+| `--genome` | one of these two | (required) | FASTA of the reference genome. amet derives all CpG positions on first use and caches them to `<fasta>.cpg`. |
+| `--cpg-reference` | one of these two | (required) | Tab-separated `chrom\tpos` of every CpG to consider, 0-based. Defines adjacency: any uncovered reference CpG breaks 2-mer pairing across it. |
+| `--cells` | yes | (required) | Manifest TSV (see below). |
+| `--features` | yes | (required) | Standard BED file of regions to score. Features should not overlap. |
+| `--output-prefix` | yes | (required) | Prefix for the two output files. |
 | `--group-column` | no | `group` | Manifest column to use as the group label. |
 | `--meth-call-threshold` | no | `0.0` | Methylation fraction `m/t` above which a CpG is called methylated. `0.5` for majority rule; `0.1` calls any position with > 10% methylated reads as methylated. |
 | `--min-reads-per-cpg` | no | `1` | A CpG is observed only if covered by at least this many reads. Default fits single-cell norms; bulk WGBS users typically set 5-10. |
 | `--min-cpgs-per-feature` | no | `5` | A `(cell, feature)` is scored only if at least this many CpGs are covered. Below the threshold, scores are reported as `NA`. |
+| `--min-cells-per-group` | no | `10` | A `(feature, group)` reports `jsd` only if at least this many cells pass the per-cell coverage filter. Otherwise `jsd` is `NA`. |
 | `--i-max-lag` | no | `3` | Maximum CpG lag k for `I_total = sum_{k=1..max} I_k`. |
 | `--threads` | no | `0` (all) | Number of threads. |
 
@@ -86,7 +91,7 @@ C03        inhibitory    data/ecker/C03.allc.tsv.gz        b2     d1
 - `allc` / methylpy: 7+ columns, per-strand or pre-collapsed, `CG`-context filter applied. Default for unrecognised filenames.
 - `scNMT` cpg_level: 5 columns with header, `pos` is the 1-based G position.
 
-amet auto-detects from the filename: `*.allc.*` → allc, `*.cpg_level.*` or `*.scnmt.*` → scNMT, other → allc. Override per cell via the `format` column in the manifest (`allc`, `methylpy`, `scnmt`, `cpg_level`).
+amet auto-detects from the filename: `*.allc.*` -> allc, `*.cpg_level.*` or `*.scnmt.*` -> scNMT, other -> allc. Override per cell via the `format` column in the manifest (`allc`, `methylpy`, `scnmt`, `cpg_level`).
 
 ### CpG reference (`--cpg-reference`)
 
@@ -126,7 +131,7 @@ One row per `(feature, group)`:
 feature_id  group  n_cells  mean_coverage  jsd
 ```
 
-JSD is computed across the cells in each group. Pooled JSD across groups is not reported; per-group is the only meaningful axis for heterogeneity.
+JSD is computed across the cells in each group using each cell's lag-1 2-mer distribution. Pooled JSD across groups is not reported; per-group is the only meaningful axis for heterogeneity. If a group has fewer than `--min-cells-per-group` eligible cells, `jsd` is reported as `NA`.
 
 ## Scores
 
@@ -141,9 +146,9 @@ I_total = sum over k=1..k_max of I_k
 
 For an i.i.d. sequence with marginal p, every I_k = 0 regardless of p, so I_total has a p-invariant zero baseline. No adjustment for marginal methylation is needed.
 
-### Across-cell, per group: `JSD`
+### Across-cell, per group: `JSD` (lag-1 2-mer)
 
-For each cell, build a 2-mer histogram per feature (4 bins: 00, 01, 10, 11). Compute Jensen-Shannon divergence across the cells in each group. JSD is reported per (feature, group), not pooled.
+For each cell, build a lag-1 2-mer histogram per feature (4 bins: 00, 01, 10, 11). Compute Jensen-Shannon divergence across the cells in each group. JSD is reported per (feature, group), not pooled.
 
 ## Simulator
 
@@ -159,4 +164,4 @@ GPL-3.0-or-later.
 
 ## Contact
 
-Izaskun Mallona — [izaskun.mallona.work@gmail.com](mailto:izaskun.mallona.work@gmail.com)
+Izaskun Mallona - [izaskun.mallona.work@gmail.com](mailto:izaskun.mallona.work@gmail.com)

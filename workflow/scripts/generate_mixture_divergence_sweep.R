@@ -38,7 +38,8 @@ for (delta in deltas) {
         list(p00 = 0.5, p11 = 0.5),
         list(p00 = 0.5 + delta, p11 = 0.5 + delta)
     )
-    out <- simulate_mixture_cells(opt$n_cells_per_value, opt$n_cpgs, components)
+    out <- simulate_mixture_cells(opt$n_cells_per_value, opt$n_cpgs, components,
+                                  seed = opt$seed + as.integer(round(delta * 100)))
     for (i in seq_along(out$cells)) {
         id <- sprintf("d%.2f_cell%d", delta, i)
         path <- file.path(cells_dir, sprintf("%s.allc.tsv.gz", id))

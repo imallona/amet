@@ -1,10 +1,11 @@
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "amet")]
 #[command(about = "p-decoupled information-theoretic scores for single-cell DNA methylation", long_about = None)]
 #[command(version)]
+#[command(group(ArgGroup::new("cpgs").required(true).args(["genome", "cpg_reference"])))]
 pub struct Cli {
     /// Tab-separated manifest with columns cell_id, group, path, plus optional extras.
     /// `format` column overrides per-cell format auto-detection.
@@ -15,9 +16,16 @@ pub struct Cli {
     #[arg(long, value_name = "BED")]
     pub features: PathBuf,
 
+    /// FASTA of the reference genome. amet derives all CpG positions from it on first
+    /// use and caches them to <fasta>.cpg next to the input. Subsequent runs reuse the
+    /// cache. Mutually exclusive with --cpg-reference.
+    #[arg(long, value_name = "FASTA")]
+    pub genome: Option<PathBuf>,
+
     /// CpG reference TSV (chrom\tpos), 0-based positions of every CpG to consider.
+    /// Mutually exclusive with --genome.
     #[arg(long, value_name = "TSV")]
-    pub cpg_reference: PathBuf,
+    pub cpg_reference: Option<PathBuf>,
 
     /// Output file prefix.
     #[arg(long, value_name = "PREFIX")]
@@ -40,6 +48,10 @@ pub struct Cli {
     /// Minimum covered CpGs required to compute scores for a (cell, feature).
     #[arg(long, default_value_t = 5)]
     pub min_cpgs_per_feature: u32,
+
+    /// Minimum number of cells required to report JSD for a (feature, group).
+    #[arg(long, default_value_t = 10)]
+    pub min_cells_per_group: u32,
 
     /// Maximum CpG lag k for the I_total within-cell score: I_total = sum_{k=1..max} I_k.
     #[arg(long, default_value_t = 3)]

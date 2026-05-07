@@ -2,8 +2,10 @@
 ## (p00, p11). Cell i is sampled from component i mod K, so the mixture has K
 ## equally-weighted components.
 
-source(file.path(dirname(sys.frame(1)$ofile), "write_outputs.R"))
-source(file.path(dirname(sys.frame(1)$ofile), "simulate_markov_chain.R"))
+.this_dir <- local({ args <- commandArgs(trailingOnly = FALSE); fa <- grep("^--file=", args, value = TRUE); if (length(fa) > 0) dirname(sub("^--file=", "", fa[1])) else "." })
+
+source(file.path(.this_dir, "write_outputs.R"))
+source(file.path(.this_dir, "simulate_markov_chain.R"))
 
 simulate_mixture_cells <- function(n_cells, n_cpgs, components, seed = 1) {
     set.seed(seed)

@@ -1,13 +1,14 @@
-## Headline contrast: I_total vs a marginal-only Shannon baseline.
-## The Shannon baseline H(p_obs) is computed from the per-cell mean methylation; this
-## is what a metric coupled to the marginal would look like. I_total should be flat
-## against mean methylation (no inflation in the middle, no suppression at edges)
-## whereas the Shannon baseline is curved.
+## Headline contrast: I_norm vs the marginal-only Shannon baseline H(p_obs).
+## A single panel overlays both curves for both iid and structured cells, so the
+## contrast between an axis-specific score (I_norm) and a marginal-only score
+## (H(p)) is visible at a glance.
 
 suppressPackageStartupMessages({
-    library(optparse); library(ggplot2); library(dplyr); library(patchwork)
+    library(optparse); library(ggplot2); library(dplyr); library(tidyr)
 })
-source(file.path(dirname(sys.frame(1)$ofile), "plot_theme.R"))
+.this_dir <- local({ args <- commandArgs(trailingOnly = FALSE); fa <- grep("^--file=", args, value = TRUE); if (length(fa) > 0) dirname(sub("^--file=", "", fa[1])) else "." })
+
+source(file.path(.this_dir, "plot_theme.R"))
 
 shannon_h <- function(p) {
     out <- numeric(length(p))
@@ -25,31 +26,35 @@ opt <- parse_args(OptionParser(option_list = options))
 df <- read.table(gzfile(opt$cell_feature), header = TRUE, sep = "\t",
                  na.strings = "NA", stringsAsFactors = FALSE)
 df$shannon_marginal <- shannon_h(df$mean_meth)
-df <- df %>% filter(!is.na(i_total))
+i_cols <- grep("^i_[0-9]+$", names(df), value = TRUE); k_max <- length(i_cols)
+df$i_norm <- df$i_total / (k_max * shannon_h(df$mean_meth))
+df <- df %>% filter(is.finite(i_norm))
 df$structure <- ifelse(grepl("^iid_", df$cell_id), "iid", "structured")
 
 agg <- df %>%
     mutate(p_bin = round(mean_meth, 1)) %>%
     group_by(p_bin, structure) %>%
     summarise(mean_meth = mean(mean_meth),
-              i_total_mean = mean(i_total),
-              shannon_mean = mean(shannon_marginal),
+              I_norm = mean(i_norm),
+              `H(p)` = mean(shannon_marginal),
               .groups = "drop")
 
-p1 <- ggplot(agg, aes(x = mean_meth, y = i_total_mean, colour = structure)) +
-    geom_point(size = 1) +
-    scale_colour_manual(values = c(iid = "grey40", structured = "firebrick")) +
-    labs(x = "mean methylation",
-         y = expression(I[total] ~ "(bits)"),
-         title = "amet I_total") +
-    theme_ng()
-p2 <- ggplot(agg, aes(x = mean_meth, y = shannon_mean, colour = structure)) +
-    geom_point(size = 1) +
-    scale_colour_manual(values = c(iid = "grey40", structured = "firebrick")) +
-    labs(x = "mean methylation", y = "H(p) (bits)",
-         title = "marginal-only Shannon baseline") +
-    theme_ng()
+long <- agg %>%
+    pivot_longer(cols = c(I_norm, `H(p)`), names_to = "score", values_to = "value")
+long$score <- factor(long$score, levels = c("I_norm", "H(p)"))
 
-save_eval(p1 + p2 + plot_layout(guides = "collect"), agg, opt$output_prefix,
-          width_mm = 130, height_mm = 65)
+p <- ggplot(long, aes(x = mean_meth, y = value,
+                      colour = structure, linetype = score, shape = score)) +
+    geom_line(linewidth = 0.4) +
+    geom_point(size = 1.5) +
+    scale_colour_manual(values = c(iid = "grey40", structured = "firebrick")) +
+    scale_linetype_manual(values = c(I_norm = "solid", `H(p)` = "dashed")) +
+    scale_shape_manual(values = c(I_norm = 16, `H(p)` = 1)) +
+    scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.25)) +
+    labs(x = "mean methylation", y = "score",
+         colour = "structure", linetype = "score", shape = "score",
+         title = "amet I_norm (solid) vs marginal-only Shannon H(p) (dashed)") +
+    theme_ng() + theme(aspect.ratio = NULL)
+
+save_eval(p, agg, opt$output_prefix, width_mm = 110, height_mm = 80)
 message(sprintf("[eval_vs_marginal_baseline] wrote %s.{pdf,svg,csv}", opt$output_prefix))

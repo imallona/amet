@@ -1,0 +1,22 @@
+name: amet-r-tools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base>=4.3
+  - r-data.table
+  - r-optparse
+  - r-ggplot2
+  - r-dplyr
+  - r-tidyr
+  - r-patchwork
+  - r-svglite
+  - r-remotes
+  - r-rmarkdown
+  - r-knitr
+  - bioconductor-singlecellexperiment
+  - bioconductor-summarizedexperiment
+  - bioconductor-qvalue
+  - bioconductor-scmet
+  - bioconductor-txdb.hsapiens.ucsc.hg19.knowngene
+  - bioconductor-txdb.hsapiens.ucsc.hg38.knowngene

@@ -1,10 +1,11 @@
-## I_total robustness as coverage drops. Plots I_total against the realised number of
-## covered CpGs and against mean methylation.
+## I_norm robustness as coverage drops, across the full methylation range.
+## Single-panel plot: x = mean covered CpGs, y = I_norm, colour = mean methylation.
 
 suppressPackageStartupMessages({
-    library(optparse); library(ggplot2); library(dplyr); library(patchwork)
+    library(optparse); library(ggplot2); library(dplyr)
 })
-source(file.path(dirname(sys.frame(1)$ofile), "plot_theme.R"))
+.this_dir <- local({ args <- commandArgs(trailingOnly = FALSE); fa <- grep("^--file=", args, value = TRUE); if (length(fa) > 0) dirname(sub("^--file=", "", fa[1])) else "." })
+source(file.path(.this_dir, "plot_theme.R"))
 
 options <- list(
     make_option(c("--cell_feature"), type = "character"),
@@ -12,31 +13,38 @@ options <- list(
 )
 opt <- parse_args(OptionParser(option_list = options))
 
+shannon_binary <- function(p) {
+    out <- numeric(length(p)); safe <- !is.na(p) & p > 0 & p < 1
+    out[safe] <- -p[safe] * log2(p[safe]) - (1 - p[safe]) * log2(1 - p[safe])
+    out[!safe] <- NA_real_; out
+}
 df <- read.table(gzfile(opt$cell_feature), header = TRUE, sep = "\t",
                  na.strings = "NA", stringsAsFactors = FALSE)
-df$n_fragments <- as.integer(sub("nf([0-9]+)_seed.*", "\\1", df$cell_id))
+df$n_fragments <- as.integer(sub("nf([0-9]+)_p.*", "\\1", df$cell_id))
+df$target_p <- as.numeric(sub(".*_p([0-9.]+)_seed.*", "\\1", df$cell_id))
+i_cols <- grep("^i_[0-9]+$", names(df), value = TRUE); k_max <- length(i_cols)
+df$i_norm <- df$i_total / (k_max * shannon_binary(df$mean_meth))
 
 agg <- df %>%
-    filter(!is.na(i_total)) %>%
-    group_by(n_fragments) %>%
+    filter(is.finite(i_norm)) %>%
+    group_by(n_fragments, target_p) %>%
     summarise(n_covered_mean = mean(n_covered),
-              mean_meth = mean(mean_meth, na.rm = TRUE),
-              i_total_mean = mean(i_total),
-              i_total_sd = sd(i_total),
+              i_norm_mean = mean(i_norm),
+              i_norm_sd = sd(i_norm),
               n = dplyr::n(), .groups = "drop")
 
-p1 <- ggplot(agg, aes(x = n_covered_mean, y = i_total_mean)) +
-    geom_errorbar(aes(ymin = i_total_mean - i_total_sd,
-                      ymax = i_total_mean + i_total_sd), width = 0) +
-    geom_point(size = 1) +
-    labs(x = "mean covered CpGs", y = expression(I[total] ~ "(bits)")) +
-    theme_ng()
-p2 <- ggplot(agg, aes(x = mean_meth, y = i_total_mean)) +
-    geom_errorbar(aes(ymin = i_total_mean - i_total_sd,
-                      ymax = i_total_mean + i_total_sd), width = 0) +
-    geom_point(size = 1) +
-    labs(x = "mean methylation", y = expression(I[total] ~ "(bits)")) +
-    theme_ng()
+p <- ggplot(agg, aes(x = n_covered_mean, y = i_norm_mean,
+                     colour = target_p, group = factor(target_p))) +
+    geom_errorbar(aes(ymin = i_norm_mean - i_norm_sd,
+                      ymax = i_norm_mean + i_norm_sd),
+                  width = 0, alpha = 0.6) +
+    geom_line(linewidth = 0.4) +
+    geom_point(size = 1.4) +
+    scale_colour_viridis_c(option = "inferno", limits = c(0, 1)) +
+    scale_x_log10() +
+    labs(x = "mean covered CpGs (log)", y = expression(I[norm]),
+         colour = "target p") +
+    theme_ng() + theme(aspect.ratio = NULL)
 
-save_eval(p1 + p2, agg, opt$output_prefix, width_mm = 120, height_mm = 60)
+save_eval(p, agg, opt$output_prefix, width_mm = 100, height_mm = 75)
 message(sprintf("[eval_sparsity] wrote %s.{pdf,svg,csv}", opt$output_prefix))

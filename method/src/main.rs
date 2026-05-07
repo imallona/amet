@@ -44,13 +44,15 @@ fn main() -> Result<()> {
     let i_max_lag = cli.i_max_lag as usize;
     let cf_path = with_suffix(&cli.output_prefix, ".cell_feature.tsv.gz");
     let feat_path = with_suffix(&cli.output_prefix, ".feature.tsv.gz");
+    let pair_path = with_suffix(&cli.output_prefix, ".pair_counts.tsv.gz");
 
     let mut cf_writer = open_write(&cf_path).context("opening cell_feature output")?;
     let mut feat_writer = open_write(&feat_path).context("opening feature output")?;
+    let mut pair_writer = open_write(&pair_path).context("opening pair_counts output")?;
 
     write!(
         cf_writer,
-        "cell_id\tgroup\tfeature_id\tn_covered\tmean_meth\ti_total"
+        "cell_id\tgroup\tfeature_id\tn_covered\tmean_meth\tn_zeros\tn_ones\ti_total"
     )?;
     for k in 1..=i_max_lag {
         write!(cf_writer, "\ti_{}", k)?;
@@ -58,7 +60,11 @@ fn main() -> Result<()> {
     writeln!(cf_writer)?;
     writeln!(
         feat_writer,
-        "feature_id\tgroup\tn_cells\tmean_coverage\tjsd"
+        "feature_id\tgroup\tn_cells\tmean_coverage\tmean_meth_mean\tmean_meth_var\ti_total_mean\ti_total_var\tjsd"
+    )?;
+    writeln!(
+        pair_writer,
+        "cell_id\tgroup\tfeature_id\tlag\tn00\tn01\tn10\tn11"
     )?;
 
     // Per-cell processing in parallel; results streamed to the writers afterwards.
@@ -88,6 +94,7 @@ fn main() -> Result<()> {
                     cli.min_reads_per_cpg,
                 );
                 let n_cov = window.n_observed() as u32;
+                let mc = marginal_counts(&window);
                 let pair_tables: Vec<PairCounts> = (1..=i_max_lag)
                     .map(|lag| pair_counts(&window, lag))
                     .collect();
@@ -100,19 +107,23 @@ fn main() -> Result<()> {
                     group: cell.group.clone(),
                     feature_id: feature.feature_id.clone(),
                     n_covered: n_cov,
+                    n_zeros: mc.counts[0],
+                    n_ones: mc.counts[1],
                     mean_meth: mean,
                     i_total_value: total,
                     i_per_lag,
-                    pair_lag1: pair_tables[0],
+                    pair_tables,
                 });
             }
             rows
         })
         .collect();
 
-    // Write per-cell-per-feature output and collect lag-1 pair tables for JSD.
+    // Write per-cell-per-feature, per-cell-per-feature-per-lag, and collect lag-1 for JSD.
     let mut feat_to_group_cells: HashMap<(String, String), Vec<PairCounts>> = HashMap::new();
     let mut feat_to_group_coverage: HashMap<(String, String), (u64, u64)> = HashMap::new();
+    let mut feat_to_group_meth: HashMap<(String, String), Vec<f64>> = HashMap::new();
+    let mut feat_to_group_itotal: HashMap<(String, String), Vec<f64>> = HashMap::new();
     let min_n = cli.min_cpgs_per_feature;
 
     for cell_rows in &per_cell_results {
@@ -126,6 +137,7 @@ fn main() -> Result<()> {
                 Some(m) => write!(cf_writer, "{:.6}", m)?,
                 None => write!(cf_writer, "NA")?,
             }
+            write!(cf_writer, "\t{}\t{}", row.n_zeros, row.n_ones)?;
             if row.n_covered >= min_n {
                 write!(cf_writer, "\t{:.6}", row.i_total_value)?;
                 for v in &row.i_per_lag {
@@ -139,20 +151,43 @@ fn main() -> Result<()> {
             }
             writeln!(cf_writer)?;
 
+            // Pair counts per lag, always emitted (regardless of min_cpgs_per_feature).
+            for (idx, pt) in row.pair_tables.iter().enumerate() {
+                let lag = idx + 1;
+                writeln!(
+                    pair_writer,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    row.cell_id,
+                    row.group,
+                    row.feature_id,
+                    lag,
+                    pt.counts[0],
+                    pt.counts[1],
+                    pt.counts[2],
+                    pt.counts[3]
+                )?;
+            }
+
             if row.n_covered >= min_n {
                 let key = (row.feature_id.clone(), row.group.clone());
                 feat_to_group_cells
                     .entry(key.clone())
                     .or_default()
-                    .push(row.pair_lag1);
-                let acc = feat_to_group_coverage.entry(key).or_insert((0, 0));
+                    .push(row.pair_tables[0]);
+                let acc = feat_to_group_coverage.entry(key.clone()).or_insert((0, 0));
                 acc.0 += row.n_covered as u64;
                 acc.1 += 1;
+                if let Some(m) = row.mean_meth {
+                    feat_to_group_meth.entry(key.clone()).or_default().push(m);
+                }
+                feat_to_group_itotal
+                    .entry(key)
+                    .or_default()
+                    .push(row.i_total_value);
             }
         }
     }
 
-    // Per-feature per-group JSD output.
     let mut keys: Vec<_> = feat_to_group_cells.keys().cloned().collect();
     keys.sort();
     for key in keys {
@@ -163,21 +198,27 @@ fn main() -> Result<()> {
         } else {
             0.0
         };
+        let meth_vals = feat_to_group_meth.get(&key);
+        let i_vals = feat_to_group_itotal.get(&key);
+        let (meth_mean, meth_var) = mean_var(meth_vals);
+        let (i_mean, i_var) = mean_var(i_vals);
         let jsd = multi_jsd(cells);
-        writeln!(
-            feat_writer,
-            "{}\t{}\t{}\t{:.6}\t{:.6}",
-            key.0, key.1, n_cells, mean_cov, jsd
-        )?;
+        write!(feat_writer, "{}\t{}\t{}\t{:.6}\t", key.0, key.1, n_cells, mean_cov)?;
+        write_opt(&mut feat_writer, meth_mean)?;
+        write!(feat_writer, "\t")?;
+        write_opt(&mut feat_writer, meth_var)?;
+        write!(feat_writer, "\t")?;
+        write_opt(&mut feat_writer, i_mean)?;
+        write!(feat_writer, "\t")?;
+        write_opt(&mut feat_writer, i_var)?;
+        writeln!(feat_writer, "\t{:.6}", jsd)?;
     }
 
-    // Suppress dead_code warnings for marginal_counts in v0.1 by using it nowhere yet.
-    let _ = marginal_counts;
-
     eprintln!(
-        "[amet] done. wrote {} and {}",
+        "[amet] done. wrote {}, {}, {}",
         cf_path.display(),
-        feat_path.display()
+        feat_path.display(),
+        pair_path.display()
     );
     Ok(())
 }
@@ -187,14 +228,37 @@ struct CellFeatureRow {
     group: String,
     feature_id: String,
     n_covered: u32,
+    n_zeros: u32,
+    n_ones: u32,
     mean_meth: Option<f64>,
     i_total_value: f64,
     i_per_lag: Vec<f64>,
-    pair_lag1: PairCounts,
+    pair_tables: Vec<PairCounts>,
 }
 
 fn with_suffix(prefix: &std::path::Path, suffix: &str) -> std::path::PathBuf {
     let mut s = prefix.as_os_str().to_owned();
     s.push(suffix);
     std::path::PathBuf::from(s)
+}
+
+fn mean_var(values: Option<&Vec<f64>>) -> (Option<f64>, Option<f64>) {
+    let v = match values {
+        Some(v) if !v.is_empty() => v,
+        _ => return (None, None),
+    };
+    let n = v.len() as f64;
+    let mean = v.iter().sum::<f64>() / n;
+    if v.len() < 2 {
+        return (Some(mean), None);
+    }
+    let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    (Some(mean), Some(var))
+}
+
+fn write_opt<W: Write>(w: &mut W, x: Option<f64>) -> std::io::Result<()> {
+    match x {
+        Some(v) => write!(w, "{:.6}", v),
+        None => write!(w, "NA"),
+    }
 }

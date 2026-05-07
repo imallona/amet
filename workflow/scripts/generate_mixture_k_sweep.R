@@ -4,9 +4,11 @@
 ## matrices.
 
 suppressPackageStartupMessages({ library(optparse) })
-source(file.path(dirname(sys.frame(1)$ofile), "write_outputs.R"))
-source(file.path(dirname(sys.frame(1)$ofile), "simulate_markov_chain.R"))
-source(file.path(dirname(sys.frame(1)$ofile), "mix_markovs.R"))
+.this_dir <- local({ args <- commandArgs(trailingOnly = FALSE); fa <- grep("^--file=", args, value = TRUE); if (length(fa) > 0) dirname(sub("^--file=", "", fa[1])) else "." })
+
+source(file.path(.this_dir, "write_outputs.R"))
+source(file.path(.this_dir, "simulate_markov_chain.R"))
+source(file.path(.this_dir, "mix_markovs.R"))
 
 build_components <- function(K) {
     ## K components evenly spaced across the persistence axis at fixed pi_1 = 0.5.

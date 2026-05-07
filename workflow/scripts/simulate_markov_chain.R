@@ -13,7 +13,9 @@ suppressPackageStartupMessages({
     library(optparse)
 })
 
-source(file.path(dirname(sys.frame(1)$ofile), "write_outputs.R"))
+.this_dir <- local({ args <- commandArgs(trailingOnly = FALSE); fa <- grep("^--file=", args, value = TRUE); if (length(fa) > 0) dirname(sub("^--file=", "", fa[1])) else "." })
+
+source(file.path(.this_dir, "write_outputs.R"))
 
 simulate_markov_cell <- function(n, p00, p11, seed = NA) {
     if (!is.na(seed)) set.seed(seed)

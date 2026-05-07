@@ -12,7 +12,8 @@ options <- list(
     make_option(c("--manifest"), type = "character"),
     make_option(c("--cpg_reference"), type = "character"),
     make_option(c("--output"), type = "character"),
-    make_option(c("--threads"), type = "integer", default = 4)
+    make_option(c("--threads"), type = "integer", default = 4),
+    make_option(c("--seed"), type = "integer", default = 42)
 )
 opt <- parse_args(OptionParser(option_list = options))
 
@@ -54,7 +55,7 @@ impute_row <- function(x) {
     x[miss] <- as.integer(runif(sum(miss)) < p)
     as.integer(x)
 }
-set.seed(42)
+set.seed(opt$seed)
 mat <- t(apply(mat, 1, impute_row))
 
 meta <- data.frame(cell_id = manifest$cell_id, group = manifest$group,

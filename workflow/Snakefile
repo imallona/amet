@@ -407,7 +407,7 @@ rule run_amet_n_cells_sweep:
         prefix = op.join(SIM, "amet", "n_cells_sweep", "n_cells_sweep"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = 2,
+        min_cells = config["amet"]["min_cells_per_group"],
     shell:
         """
         mkdir -p $(dirname {params.prefix})
@@ -598,7 +598,7 @@ rule run_epichaos_wcvi:
     shell:
         "Rscript workflow/scripts/run_epichaos.R "
         "--manifest {input.manifest} --cpg_reference {input.cpgs} "
-        "--output {output} --threads {threads} &> {log}"
+        "--output {output} --threads {threads} --seed {config[sim][seed]} &> {log}"
 
 
 rule run_epichaos_acvi:
@@ -613,7 +613,7 @@ rule run_epichaos_acvi:
     shell:
         "Rscript workflow/scripts/run_epichaos.R "
         "--manifest {input.manifest} --cpg_reference {input.cpgs} "
-        "--output {output} --threads {threads} &> {log}"
+        "--output {output} --threads {threads} --seed {config[sim][seed]} &> {log}"
 
 
 rule eval_tool_comparison:

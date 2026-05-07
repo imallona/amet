@@ -73,6 +73,18 @@ pub fn read_cpg_reference(path: &Path) -> Result<CpgReference> {
                 let id = chrom_names.len() as u32;
                 chrom_names.push(chrom.to_string());
                 chrom_id_of.insert(chrom.to_string(), id);
+                // Register the other prefix convention so lookups work whether
+                // the caller uses `19` or `chr19`. The canonical name in
+                // chrom_names (and therefore in output) is whatever the
+                // reference used.
+                if let Some(stripped) = chrom.strip_prefix("chr") {
+                    if !stripped.is_empty() && !chrom_id_of.contains_key(stripped) {
+                        chrom_id_of.insert(stripped.to_string(), id);
+                    }
+                } else {
+                    let prefixed = format!("chr{}", chrom);
+                    chrom_id_of.entry(prefixed).or_insert(id);
+                }
                 positions.push(Vec::new());
                 id
             }
@@ -146,5 +158,31 @@ mod tests {
         assert_eq!(r.chrom_id("chr2"), Some(1));
         assert_eq!(r.chrom_id("chrX"), None);
         assert_eq!(r.chrom_name(0), "chr1");
+    }
+
+    #[test]
+    fn lookup_handles_chr_prefix_either_way() {
+        // Reference uses UCSC naming. Lookups must succeed for Ensembl-style names too.
+        let f = write("chr1\t100\nchr19\t200\n");
+        let r = read_cpg_reference(f.path()).unwrap();
+        assert_eq!(r.chrom_id("chr1"), Some(0));
+        assert_eq!(r.chrom_id("1"), Some(0));
+        assert_eq!(r.chrom_id("chr19"), Some(1));
+        assert_eq!(r.chrom_id("19"), Some(1));
+        // Canonical names in output stay UCSC-style.
+        assert_eq!(r.chrom_name(0), "chr1");
+        assert_eq!(r.chrom_name(1), "chr19");
+    }
+
+    #[test]
+    fn lookup_handles_ensembl_reference_too() {
+        // Reference uses Ensembl naming. Lookups must succeed for UCSC-style names too.
+        let f = write("1\t100\n19\t200\n");
+        let r = read_cpg_reference(f.path()).unwrap();
+        assert_eq!(r.chrom_id("1"), Some(0));
+        assert_eq!(r.chrom_id("chr1"), Some(0));
+        assert_eq!(r.chrom_id("19"), Some(1));
+        assert_eq!(r.chrom_id("chr19"), Some(1));
+        assert_eq!(r.chrom_name(0), "1");
     }
 }

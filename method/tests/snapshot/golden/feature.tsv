@@ -1,0 +1,3 @@
+feature_id	group	n_cells	mean_coverage	mean_meth_mean	mean_meth_var	i_total_mean	i_total_var	jsd
+region1	g1	2	6.000000	0.500000	0.000000	0.542529	0.000000	0.200000
+region1	g2	2	6.000000	0.500000	0.000000	3.454302	0.000000	0.000000

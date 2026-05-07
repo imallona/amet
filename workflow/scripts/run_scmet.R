@@ -26,12 +26,7 @@ options <- list(
 )
 opt <- parse_args(OptionParser(option_list = options))
 
-df <- if (endsWith(opt$cell_feature, ".gz")) {
-    fread(cmd = sprintf("zcat %s", shQuote(opt$cell_feature)),
-          header = TRUE, sep = "\t", na.strings = "NA")
-} else {
-    fread(opt$cell_feature, header = TRUE, sep = "\t", na.strings = "NA")
-}
+df <- fread(opt$cell_feature, header = TRUE, sep = "\t", na.strings = "NA")
 df <- df[!is.na(n_ones) & !is.na(n_zeros) & (n_ones + n_zeros) > 0L]
 
 if (!opt$feature_column %in% names(df)) {

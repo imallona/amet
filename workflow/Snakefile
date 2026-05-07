@@ -2,16 +2,22 @@
 ##
 ## Tasks:
 ##   simulations: full validation grid (10 evaluations across 8 simulation scenarios)
-##   ecker: TODO
-##   argelaguet: TODO
+##   argelaguet: render_argelaguet_report
+##   ecker:      TODO
+##   crc:        TODO
 
 import os.path as op
+import pandas as pd
 
 REPO_ROOT = op.dirname(workflow.basedir)
 RESULTS = op.join(REPO_ROOT, "results")
 AMET = op.join(REPO_ROOT, "method", "target", "release", "amet")
 
 configfile: op.join(workflow.basedir, "config", "sim.yaml")
+configfile: op.join(workflow.basedir, "config", "datasets.yaml")
+
+include: op.join("rules", "common.smk")
+include: op.join("rules", "argelaguet.smk")
 
 SIM = op.join(RESULTS, "simulations")
 
@@ -36,12 +42,20 @@ EVAL_OUTPUTS = [
 SIM_REPORT_HTML = op.join(SIM, "simulations_report.html")
 
 
+ARG_REPORT_HTML = op.join(RESULTS, config["argelaguet"]["run_name"],
+                          config["argelaguet"]["run_name"] + ".html")
+
+
 rule all:
     input: SIM_REPORT_HTML
 
 
 rule simulations:
     input: SIM_REPORT_HTML
+
+
+rule argelaguet:
+    input: ARG_REPORT_HTML
 
 
 rule render_simulations_report:
@@ -56,13 +70,6 @@ rule render_simulations_report:
         r"""
         Rscript -e 'rmarkdown::render("{input.rmd}", output_file="simulations_report.html", output_dir="{params.out_dir}", params=list(eval_dir="{params.eval_dir}"), quiet=TRUE)'
         """
-
-
-rule build_amet:
-    output:
-        binary = AMET,
-    shell:
-        "cd {REPO_ROOT}/method && cargo build --release"
 
 
 # ----- p sweep -----

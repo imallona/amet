@@ -1,5 +1,6 @@
 use amet::cli::Cli;
 use amet::features::read_features;
+use amet::genome::ensure_cpg_index;
 use amet::io::open_write;
 use amet::kmer::{PairCounts, build_window, marginal_counts, pair_counts};
 use amet::manifest::read_manifest;
@@ -10,6 +11,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 
 fn main() -> Result<()> {
     let cli = Cli::parse_args();
@@ -21,11 +23,13 @@ fn main() -> Result<()> {
             .context("failed to set up thread pool")?;
     }
 
-    eprintln!(
-        "[amet] reading CpG reference: {}",
-        cli.cpg_reference.display()
-    );
-    let reference = read_cpg_reference(&cli.cpg_reference).context("reading CpG reference")?;
+    let cpg_path: PathBuf = match (&cli.genome, &cli.cpg_reference) {
+        (Some(fa), None) => ensure_cpg_index(fa).context("building CpG index from genome")?,
+        (None, Some(p)) => p.clone(),
+        _ => unreachable!("clap ArgGroup ensures exactly one of --genome and --cpg-reference"),
+    };
+    eprintln!("[amet] reading CpG reference: {}", cpg_path.display());
+    let reference = read_cpg_reference(&cpg_path).context("reading CpG reference")?;
     let total_cpgs: usize = reference.positions.iter().map(|v| v.len()).sum();
     eprintln!(
         "[amet] reference: {} chromosomes, {} CpGs",

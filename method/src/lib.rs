@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod error;
 pub mod features;
+pub mod genome;
 pub mod io;
 pub mod kmer;
 pub mod manifest;

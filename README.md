@@ -17,21 +17,22 @@ Early prototype (v0.1).
 
 ```
 amet/
-├── method/                    Rust crate (the amet binary and library)
-│   ├── Cargo.toml
-│   ├── src/                   parsers, scores, CLI, I/O
-│   └── tests/                 integration tests
-├── workflow/                  Snakemake workflow for simulations and dataset analyses
-│   ├── Snakefile
-│   ├── config/sim.yaml        simulation parameters
-│   ├── envs/r.yml             conda env for the R scripts
-│   ├── scripts/               R scripts (data generation, evaluation)
-│   └── Rmd/                   reports
-├── results/                   gitignored: outputs of running the workflow
-├── .github/workflows/         CI definitions
-├── README.md
-├── LICENSE
-└── AUTHORS
+  method/                    Rust crate (the amet binary and library)
+    Cargo.toml
+    src/                     parsers, scores, CLI, I/O
+    tests/                   integration tests
+  workflow/                  Snakemake workflow for simulations and dataset analyses
+    Snakefile
+    config/sim.yaml          simulation parameters
+    config/datasets.yaml     dataset paths and prototype subsets
+    envs/                    conda envs (rust, bedtools, r-tools, python)
+    scripts/                 R / Python / shell helpers
+    Rmd/                     reports
+  results/                   gitignored: outputs of running the workflow
+  .github/workflows/         CI definitions
+  README.md
+  LICENSE
+  AUTHORS
 ```
 
 ## Build
@@ -47,7 +48,7 @@ The binary lives at `method/target/release/amet`.
 
 ```
 amet \
-  --cpg-reference cpgs.tsv.gz \
+  --genome mm10.fa \
   --cells cells.tsv \
   --features features.bed \
   --output-prefix run1
@@ -55,11 +56,14 @@ amet \
 
 Outputs land at `run1.cell_feature.tsv.gz` and `run1.feature.tsv.gz`.
 
+On the first run amet derives every CpG position from the FASTA and writes a sidecar `mm10.fa.cpg` next to the input. Subsequent runs reuse the sidecar. If you already have a CpG list, pass `--cpg-reference cpgs.tsv.gz` instead. Exactly one of `--genome` or `--cpg-reference` is required.
+
 ## CLI
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `--cpg-reference` | yes | (required) | Tab-separated `chrom\tpos` of every CpG to consider, 0-based. Defines adjacency: any uncovered reference CpG breaks 2-mer pairing across it. |
+| `--genome` | one of these two | (required) | FASTA of the reference genome. amet derives all CpG positions on first use and caches them to `<fasta>.cpg`. |
+| `--cpg-reference` | one of these two | (required) | Tab-separated `chrom\tpos` of every CpG to consider, 0-based. Defines adjacency: any uncovered reference CpG breaks 2-mer pairing across it. |
 | `--cells` | yes | (required) | Manifest TSV (see below). |
 | `--features` | yes | (required) | Standard BED file of regions to score. Features should not overlap. |
 | `--output-prefix` | yes | (required) | Prefix for the two output files. |
@@ -87,7 +91,7 @@ C03        inhibitory    data/ecker/C03.allc.tsv.gz        b2     d1
 - `allc` / methylpy: 7+ columns, per-strand or pre-collapsed, `CG`-context filter applied. Default for unrecognised filenames.
 - `scNMT` cpg_level: 5 columns with header, `pos` is the 1-based G position.
 
-amet auto-detects from the filename: `*.allc.*` ->  allc, `*.cpg_level.*` or `*.scnmt.*` ->  scNMT, other ->  allc. Override per cell via the `format` column in the manifest (`allc`, `methylpy`, `scnmt`, `cpg_level`).
+amet auto-detects from the filename: `*.allc.*` -> allc, `*.cpg_level.*` or `*.scnmt.*` -> scNMT, other -> allc. Override per cell via the `format` column in the manifest (`allc`, `methylpy`, `scnmt`, `cpg_level`).
 
 ### CpG reference (`--cpg-reference`)
 
@@ -160,4 +164,4 @@ GPL-3.0-or-later.
 
 ## Contact
 
-Izaskun Mallona  [izaskun.mallona.work@gmail.com](mailto:izaskun.mallona.work@gmail.com)
+Izaskun Mallona - [izaskun.mallona.work@gmail.com](mailto:izaskun.mallona.work@gmail.com)

@@ -41,13 +41,13 @@ mod tests {
 
     #[test]
     fn entropy_uniform_2() {
-        // {1, 1} → log2(2) = 1.
+        // {1, 1} -> log2(2) = 1.
         assert!((shannon_entropy(&[1, 1]) - 1.0).abs() < 1e-12);
     }
 
     #[test]
     fn entropy_uniform_4() {
-        // {1, 1, 1, 1} → log2(4) = 2.
+        // {1, 1, 1, 1} -> log2(4) = 2.
         assert!((shannon_entropy(&[1, 1, 1, 1]) - 2.0).abs() < 1e-12);
     }
 
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn miller_madow_two_observed_bins_n10() {
-        // K=2, N=10: correction = 1 / (2*10) / ln(2) ≈ 0.0721 bits.
+        // K=2, N=10: correction = 1 / (2*10) / ln(2) ~ 0.0721 bits.
         let c = miller_madow_correction(&[5, 5]);
         assert!((c - 0.07213475).abs() < 1e-6);
     }

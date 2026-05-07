@@ -1,0 +1,11 @@
+name: amet-bedtools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bedtools
+  - curl
+  - gzip
+  - sed
+  - gawk
+  - coreutils

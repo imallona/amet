@@ -67,14 +67,14 @@ The marginal Shannon baseline cannot tell iid cells from structured ones at any 
 
 # Simulator sanity check
 
-This panel checks the p_sweep simulator ,  the simulator used by the I_norm-at-zero-baseline and the marginal-only-baseline sections. It is a 2-state Markov chain run at a target marginal `p` with two persistence regimes:
+This panel checks the p_sweep simulator, the simulator used by the I_norm-at-zero-baseline and the marginal-only-baseline sections. It is a 2-state Markov chain run at a target marginal `p` with two persistence regimes:
 
 - iid cells: persistence c = 0.5 (no comethylation; equivalent to drawing each CpG independently from Bernoulli(p)).
 - structured cells: persistence c = 0.85 at the same marginal `p` (long runs of the same state; strong comethylation).
 
 For each `target_p in {0.05, 0.10, ..., 0.95}` the generator writes 20 cells per condition. The sanity check verifies that the generator does what it claims: realised mean methylation should match `target_p` exactly (left panel, points on the diagonal), and per-cell I_1 should be small for iid and clearly positive for structured (right panel).
 
-Note: this simulator is *not* the Markov-with-repeat process used by the wcVI and acVI sweeps ,  those have their own validation in the wcVI / acVI recovery sections.
+Note: this simulator is *not* the Markov-with-repeat process used by the wcVI and acVI sweeps; those have their own validation in the wcVI / acVI recovery sections.
 
 ```{r diagnostics, results = "asis"}
 show_plot("simulator_diagnostics")
@@ -82,9 +82,9 @@ show_plot("simulator_diagnostics")
 
 # I_k profile picks up the right correlation distance
 
-I_k definition. For a single cell, `I_k` is the mutual information between CpGs that sit `k` positions apart along the genome ,  that is, between `X_i` and `X_{i+k}` averaged over all valid pairs in the cell. It quantifies how much knowing one CpG's methylation reduces uncertainty about another CpG `k` positions further along. A cell whose CpGs at distance `k` are independent has `I_k = 0`; perfect dependence saturates `I_k` at the marginal entropy `H(p)`.
+I_k definition. For a single cell, `I_k` is the mutual information between CpGs that sit `k` positions apart along the genome, that is, between `X_i` and `X_{i+k}` averaged over all valid pairs in the cell. It quantifies how much knowing one CpG's methylation reduces uncertainty about another CpG `k` positions further along. A cell whose CpGs at distance `k` are independent has `I_k = 0`; perfect dependence saturates `I_k` at the marginal entropy `H(p)`.
 
-I_total definition. amet sums `I_k` across all lags from `1` to `--i-max-lag` (here `k_max = 20`). So `I_total = I_1 + I_2 + ... + I_20`. It is the single scalar summary used as the within-cell score. A regular cell (long runs, periodic patterns) accumulates positive contributions across many lags, high `I_total`. An iid cell has `I_k 0` at every lag, `I_total 0`.
+I_total definition. amet sums `I_k` across all lags from `1` to `--i-max-lag` (here `k_max = 20`). So `I_total = I_1 + I_2 + ... + I_20`. It is the single scalar summary used as the within-cell score. A regular cell (long runs, periodic patterns) accumulates positive contributions across many lags, giving a high `I_total`. An iid cell has `I_k = 0` at every lag, so `I_total = 0`.
 
 What this section tests. Different patterns put their correlation at different lags. A Markov-style cell has its strongest dependency at lag 1 (each CpG most predicted by its neighbour), with weaker dependency at lag 2, 3, ... . A period-3 sequence like `010010010` has *zero* mutual information at lag 1 (adjacent CpGs are anti-correlated, all three pairs `(0,1), (1,0), (0,0)` show up roughly equally) but *high* mutual information at lag 3 (every third CpG matches). The plot below shows `I_k` for `k = 1..6` for four kinds of cells: amet should produce a flat-zero profile for iid, a lag-1-dominated profile for markov, and a clear bump at lag 3 (resp. lag 5) for the period-3 (resp. period-5) cells.
 
@@ -165,7 +165,7 @@ The marginal-vs-score panels (B, D) reveal whether the score is dominated by mea
 
 Each (acVI, target_p) group uses the same Markov-with-repeat process as wcVI, but `p_repeat` now varies from cell to cell within the group. The per-cell spread scales with acVI: acVI=1 -> all cells share `p_repeat = 0.725`; acVI=10 -> cells span `p_repeat in [0.5, 0.95]`. Cells with different `p_repeat` have different L-mer histograms, so JSD across cells in the group grows with acVI.
 
-Within each (acVI, target_p) group all cells share the same target marginal exactly, so JSD reflects only structural divergence,  no marginal correction is needed for the simulator setup.
+Within each (acVI, target_p) group all cells share the same target marginal exactly, so JSD reflects only structural divergence; no marginal correction is needed for the simulator setup.
 
 ```{r acvi, results = "asis"}
 show_plot("acvi_recovery")

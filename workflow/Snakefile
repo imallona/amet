@@ -1,0 +1,442 @@
+## amet simulations + evaluations.
+##
+## Tasks:
+##   simulations: full validation grid (10 evaluations across 8 simulation scenarios)
+##   ecker: TODO
+##   argelaguet: TODO
+
+import os
+from pathlib import Path
+
+REPO_ROOT = Path(workflow.basedir).parent
+RESULTS = REPO_ROOT / "results"
+AMET = REPO_ROOT / "method" / "target" / "release" / "amet"
+
+configfile: "config/sim.yaml"
+
+SIM = RESULTS / "simulations"
+
+EVAL_OUTPUTS = [
+    SIM / "eval/p_decoupling.pdf",
+    SIM / "eval/simulator_diagnostics.pdf",
+    SIM / "eval/persistence_response.pdf",
+    SIM / "eval/lag_profile.pdf",
+    SIM / "eval/sparsity.pdf",
+    SIM / "eval/feature_length.pdf",
+    SIM / "eval/jsd_mixture_k.pdf",
+    SIM / "eval/jsd_divergence.pdf",
+    SIM / "eval/n_cells.pdf",
+    SIM / "eval/vs_marginal_baseline.pdf",
+]
+
+
+rule all:
+    input:
+        EVAL_OUTPUTS
+
+
+rule simulations:
+    input:
+        EVAL_OUTPUTS
+
+
+rule build_amet:
+    output:
+        binary = AMET,
+    shell:
+        "cd {REPO_ROOT}/method && cargo build --release"
+
+
+def amet_inputs(scenario):
+    base = SIM / f"data/{scenario}"
+    return {
+        "manifest": base / "manifest.tsv",
+        "cpgs": base / "cpgs.tsv",
+        "bed": base / "feature.bed",
+        "binary": AMET,
+    }
+
+
+def amet_outputs(scenario):
+    base = SIM / f"amet/{scenario}"
+    return {
+        "cell_feature": base / f"{scenario}.cell_feature.tsv.gz",
+        "feature": base / f"{scenario}.feature.tsv.gz",
+    }
+
+
+def amet_shell(scenario, **kwargs):
+    extra = " ".join(f"--{k.replace('_', '-')} {v}" for k, v in kwargs.items())
+    base = SIM / f"amet/{scenario}"
+    inputs = amet_inputs(scenario)
+    return (
+        f"mkdir -p {base} && "
+        f"{inputs['binary']} "
+        f"--cpg-reference {inputs['cpgs']} "
+        f"--features {inputs['bed']} "
+        f"--cells {inputs['manifest']} "
+        f"--output-prefix {base}/{scenario} "
+        f"--min-cpgs-per-feature {{cfg[min_cpgs]}} "
+        f"--i-max-lag {{cfg[i_max_lag]}} "
+        f"{extra}"
+    )
+
+
+# ----- p sweep (existing) -----
+
+rule generate_p_sweep:
+    output:
+        manifest = SIM / "data/p_sweep/manifest.tsv",
+        cpgs = SIM / "data/p_sweep/cpgs.tsv",
+        bed = SIM / "data/p_sweep/feature.bed",
+    params:
+        out_dir = SIM / "data/p_sweep",
+        n_cells = config["sim"]["n_cells_per_condition"],
+        n_cpgs = config["sim"]["n_cpgs"],
+        persistence = config["sim"]["persistence"],
+        p_grid = config["sim"]["p_grid"],
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_p_sweep.R \
+            --out_dir {params.out_dir} \
+            --n_cells_per_condition {params.n_cells} \
+            --n_cpgs {params.n_cpgs} \
+            --persistence {params.persistence} \
+            --p_grid {params.p_grid} \
+            --seed {params.seed}
+        """
+
+
+rule run_amet_p_sweep:
+    input: **amet_inputs("p_sweep")
+    output: **amet_outputs("p_sweep")
+    params:
+        prefix = SIM / "amet/p_sweep/p_sweep",
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+        """
+
+
+rule eval_p_decoupling:
+    input: cell_feature = SIM / "amet/p_sweep/p_sweep.cell_feature.tsv.gz"
+    output: SIM / "eval/p_decoupling.pdf", SIM / "eval/p_decoupling.csv"
+    params: prefix = SIM / "eval/p_decoupling"
+    shell:
+        "Rscript workflow/scripts/eval_p_decoupling.R "
+        "--cell_feature {input.cell_feature} --output_prefix {params.prefix}"
+
+
+rule eval_simulator_diagnostics:
+    input: cell_feature = SIM / "amet/p_sweep/p_sweep.cell_feature.tsv.gz"
+    output: SIM / "eval/simulator_diagnostics.pdf"
+    params: prefix = SIM / "eval/simulator_diagnostics"
+    shell:
+        "Rscript workflow/scripts/eval_simulator_diagnostics.R "
+        "--cell_feature {input.cell_feature} --output_prefix {params.prefix}"
+
+
+rule eval_vs_marginal_baseline:
+    input: cell_feature = SIM / "amet/p_sweep/p_sweep.cell_feature.tsv.gz"
+    output: SIM / "eval/vs_marginal_baseline.pdf"
+    params: prefix = SIM / "eval/vs_marginal_baseline"
+    shell:
+        "Rscript workflow/scripts/eval_vs_marginal_baseline.R "
+        "--cell_feature {input.cell_feature} --output_prefix {params.prefix}"
+
+
+# ----- persistence sweep -----
+
+rule generate_persistence_sweep:
+    output:
+        manifest = SIM / "data/persistence_sweep/manifest.tsv",
+        cpgs = SIM / "data/persistence_sweep/cpgs.tsv",
+        bed = SIM / "data/persistence_sweep/feature.bed",
+    params:
+        out_dir = SIM / "data/persistence_sweep",
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_persistence_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_persistence_sweep:
+    input: **amet_inputs("persistence_sweep")
+    output: **amet_outputs("persistence_sweep")
+    params:
+        prefix = SIM / "amet/persistence_sweep/persistence_sweep",
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+        """
+
+
+rule eval_persistence_response:
+    input: cell_feature = SIM / "amet/persistence_sweep/persistence_sweep.cell_feature.tsv.gz"
+    output: SIM / "eval/persistence_response.pdf"
+    params: prefix = SIM / "eval/persistence_response"
+    shell:
+        "Rscript workflow/scripts/eval_persistence_response.R "
+        "--cell_feature {input.cell_feature} --output_prefix {params.prefix}"
+
+
+# ----- lag profile -----
+
+rule generate_lag_profile:
+    output:
+        manifest = SIM / "data/lag_profile/manifest.tsv",
+        cpgs = SIM / "data/lag_profile/cpgs.tsv",
+        bed = SIM / "data/lag_profile/feature.bed",
+    params:
+        out_dir = SIM / "data/lag_profile",
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_lag_profile.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_lag_profile:
+    input: **amet_inputs("lag_profile")
+    output: **amet_outputs("lag_profile")
+    params:
+        prefix = SIM / "amet/lag_profile/lag_profile",
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag 6 --min-cpgs-per-feature {params.min_cpgs}
+        """
+
+
+rule eval_lag_profile:
+    input: cell_feature = SIM / "amet/lag_profile/lag_profile.cell_feature.tsv.gz"
+    output: SIM / "eval/lag_profile.pdf"
+    params: prefix = SIM / "eval/lag_profile"
+    shell:
+        "Rscript workflow/scripts/eval_lag_profile.R "
+        "--cell_feature {input.cell_feature} --output_prefix {params.prefix}"
+
+
+# ----- sparsity sweep -----
+
+rule generate_sparsity_sweep:
+    output:
+        manifest = SIM / "data/sparsity_sweep/manifest.tsv",
+        cpgs = SIM / "data/sparsity_sweep/cpgs.tsv",
+        bed = SIM / "data/sparsity_sweep/feature.bed",
+    params:
+        out_dir = SIM / "data/sparsity_sweep",
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_sparsity_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_sparsity_sweep:
+    input: **amet_inputs("sparsity_sweep")
+    output: **amet_outputs("sparsity_sweep")
+    params:
+        prefix = SIM / "amet/sparsity_sweep/sparsity_sweep",
+        i_max_lag = config["amet"]["i_max_lag"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 3
+        """
+
+
+rule eval_sparsity:
+    input: cell_feature = SIM / "amet/sparsity_sweep/sparsity_sweep.cell_feature.tsv.gz"
+    output: SIM / "eval/sparsity.pdf"
+    params: prefix = SIM / "eval/sparsity"
+    shell:
+        "Rscript workflow/scripts/eval_sparsity.R "
+        "--cell_feature {input.cell_feature} --output_prefix {params.prefix}"
+
+
+# ----- feature length sweep -----
+
+rule generate_feature_length_sweep:
+    output:
+        manifest = SIM / "data/feature_length_sweep/manifest.tsv",
+        cpgs = SIM / "data/feature_length_sweep/cpgs.tsv",
+        bed = SIM / "data/feature_length_sweep/feature.bed",
+    params:
+        out_dir = SIM / "data/feature_length_sweep",
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_feature_length_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_feature_length_sweep:
+    input: **amet_inputs("feature_length_sweep")
+    output: **amet_outputs("feature_length_sweep")
+    params:
+        prefix = SIM / "amet/feature_length_sweep/feature_length_sweep",
+        i_max_lag = config["amet"]["i_max_lag"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature 3
+        """
+
+
+rule eval_feature_length:
+    input: cell_feature = SIM / "amet/feature_length_sweep/feature_length_sweep.cell_feature.tsv.gz"
+    output: SIM / "eval/feature_length.pdf"
+    params: prefix = SIM / "eval/feature_length"
+    shell:
+        "Rscript workflow/scripts/eval_feature_length.R "
+        "--cell_feature {input.cell_feature} --output_prefix {params.prefix}"
+
+
+# ----- mixture K sweep -----
+
+rule generate_mixture_k_sweep:
+    output:
+        manifest = SIM / "data/mixture_k_sweep/manifest.tsv",
+        cpgs = SIM / "data/mixture_k_sweep/cpgs.tsv",
+        bed = SIM / "data/mixture_k_sweep/feature.bed",
+    params:
+        out_dir = SIM / "data/mixture_k_sweep",
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_mixture_k_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_mixture_k_sweep:
+    input: **amet_inputs("mixture_k_sweep")
+    output: **amet_outputs("mixture_k_sweep")
+    params:
+        prefix = SIM / "amet/mixture_k_sweep/mixture_k_sweep",
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+        """
+
+
+rule eval_jsd_mixture_k:
+    input: feature = SIM / "amet/mixture_k_sweep/mixture_k_sweep.feature.tsv.gz"
+    output: SIM / "eval/jsd_mixture_k.pdf"
+    params: prefix = SIM / "eval/jsd_mixture_k"
+    shell:
+        "Rscript workflow/scripts/eval_jsd_mixture_k.R "
+        "--feature {input.feature} --output_prefix {params.prefix}"
+
+
+# ----- mixture divergence sweep -----
+
+rule generate_mixture_divergence_sweep:
+    output:
+        manifest = SIM / "data/mixture_divergence_sweep/manifest.tsv",
+        cpgs = SIM / "data/mixture_divergence_sweep/cpgs.tsv",
+        bed = SIM / "data/mixture_divergence_sweep/feature.bed",
+    params:
+        out_dir = SIM / "data/mixture_divergence_sweep",
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_mixture_divergence_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_mixture_divergence_sweep:
+    input: **amet_inputs("mixture_divergence_sweep")
+    output: **amet_outputs("mixture_divergence_sweep")
+    params:
+        prefix = SIM / "amet/mixture_divergence_sweep/mixture_divergence_sweep",
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+        """
+
+
+rule eval_jsd_divergence:
+    input: feature = SIM / "amet/mixture_divergence_sweep/mixture_divergence_sweep.feature.tsv.gz"
+    output: SIM / "eval/jsd_divergence.pdf"
+    params: prefix = SIM / "eval/jsd_divergence"
+    shell:
+        "Rscript workflow/scripts/eval_jsd_divergence.R "
+        "--feature {input.feature} --output_prefix {params.prefix}"
+
+
+# ----- n cells sweep -----
+
+rule generate_n_cells_sweep:
+    output:
+        manifest = SIM / "data/n_cells_sweep/manifest.tsv",
+        cpgs = SIM / "data/n_cells_sweep/cpgs.tsv",
+        bed = SIM / "data/n_cells_sweep/feature.bed",
+    params:
+        out_dir = SIM / "data/n_cells_sweep",
+        seed = config["sim"]["seed"],
+    shell:
+        """
+        Rscript workflow/scripts/generate_n_cells_sweep.R \
+            --out_dir {params.out_dir} --seed {params.seed}
+        """
+
+
+rule run_amet_n_cells_sweep:
+    input: **amet_inputs("n_cells_sweep")
+    output: **amet_outputs("n_cells_sweep")
+    params:
+        prefix = SIM / "amet/n_cells_sweep/n_cells_sweep",
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+    shell:
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
+            --cells {input.manifest} --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+        """
+
+
+rule eval_n_cells:
+    input: feature = SIM / "amet/n_cells_sweep/n_cells_sweep.feature.tsv.gz"
+    output: SIM / "eval/n_cells.pdf"
+    params: prefix = SIM / "eval/n_cells"
+    shell:
+        "Rscript workflow/scripts/eval_n_cells.R "
+        "--feature {input.feature} --output_prefix {params.prefix}"

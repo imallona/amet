@@ -1,0 +1,43 @@
+---
+title: "amet simulations report"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+source(file.path("..", "scripts", "theme.R"))
+```
+
+# Setup
+
+This report summarises the simulation runs under `results/simulations/`. Each cell is generated from a 2-state Markov chain. Two conditions per marginal methylation level p:
+
+- **iid**: chain with $p_{00} + p_{11} = 1$, no comethylation.
+- **structured**: persistent chain (diagonal = `persistence` from `config/sim.yaml`) at the same marginal.
+
+# I_total decoupling from marginal methylation
+
+The headline claim: `I_total` should be near zero for any iid sequence regardless of p, and positive for any structured sequence.
+
+```{r p-decoupling, fig.width = 3, fig.height = 3}
+csv_path <- file.path("..", "..", "results", "simulations", "eval", "p_decoupling.csv")
+if (file.exists(csv_path)) {
+    agg <- read.csv(csv_path)
+    knitr::kable(agg, digits = 3, caption = "I_total mean and SD per condition")
+} else {
+    cat("Run `snakemake -j 4 simulations` first to generate this report.")
+}
+```
+
+```{r p-decoupling-plot, fig.width = 3, fig.height = 3}
+plot_path <- file.path("..", "..", "results", "simulations", "eval", "p_decoupling.pdf")
+if (file.exists(plot_path)) {
+    knitr::include_graphics(plot_path)
+}
+```

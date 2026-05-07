@@ -1,0 +1,24 @@
+method/target
+**/*.rs.bk
+**/Cargo.lock
+.DS_Store
+
+# Workflow outputs
+results/
+workflow/.snakemake/
+workflow/.Rhistory
+workflow/.RData
+
+# R artefacts
+.Rhistory
+.RData
+.Ruserdata
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# Misc
+*.cpg

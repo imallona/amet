@@ -1,0 +1,12 @@
+## Simulation experiment parameters.
+
+sim:
+  n_cells_per_condition: 20
+  n_cpgs: 200
+  persistence: 0.85           # diagonal of the structured-chain transition matrix
+  p_grid: "0.1,0.3,0.5,0.7,0.9"
+  seed: 1
+
+amet:
+  i_max_lag: 3
+  min_cpgs_per_feature: 5

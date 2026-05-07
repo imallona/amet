@@ -41,6 +41,10 @@ pub struct Cli {
     #[arg(long, default_value_t = 5)]
     pub min_cpgs_per_feature: u32,
 
+    /// Minimum number of cells required to report JSD for a (feature, group).
+    #[arg(long, default_value_t = 10)]
+    pub min_cells_per_group: u32,
+
     /// Maximum CpG lag k for the I_total within-cell score: I_total = sum_{k=1..max} I_k.
     #[arg(long, default_value_t = 3)]
     pub i_max_lag: u32,

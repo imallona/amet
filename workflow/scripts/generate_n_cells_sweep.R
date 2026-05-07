@@ -35,7 +35,12 @@ set.seed(opt$seed)
 cell_ids <- character(); groups <- character(); paths <- character()
 
 for (n in ns) {
-    out <- simulate_mixture_cells(n, opt$n_cpgs, components)
+    out <- simulate_mixture_cells(
+        n,
+        opt$n_cpgs,
+        components,
+        seed = opt$seed + n
+    )
     for (i in seq_along(out$cells)) {
         id <- sprintf("n%d_cell%d", n, i)
         path <- file.path(cells_dir, sprintf("%s.allc.tsv.gz", id))

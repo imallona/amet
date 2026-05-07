@@ -5,7 +5,7 @@ amet is a tool to quantify within- and across-cells epigenetic heterogeneity usi
 It produces two complementary scores:
 
 - **Within-cell regularity** along consecutive CpGs in one cell, scored by `I_total`, the sum of mutual information across CpG lags 1..k.
-- **Across-cell heterogeneity** at a feature within a cell group, scored by `JSD` on per-cell L-mer distributions.
+- **Across-cell heterogeneity** at a feature within a cell group, scored by `JSD` on per-cell lag-1 2-mer distributions.
 
 A sequence with no comethylation structure scores zero regardless of its methylation level, so no marginal-methylation adjustment is needed.
 
@@ -67,6 +67,7 @@ Outputs land at `run1.cell_feature.tsv.gz` and `run1.feature.tsv.gz`.
 | `--meth-call-threshold` | no | `0.0` | Methylation fraction `m/t` above which a CpG is called methylated. `0.5` for majority rule; `0.1` calls any position with > 10% methylated reads as methylated. |
 | `--min-reads-per-cpg` | no | `1` | A CpG is observed only if covered by at least this many reads. Default fits single-cell norms; bulk WGBS users typically set 5-10. |
 | `--min-cpgs-per-feature` | no | `5` | A `(cell, feature)` is scored only if at least this many CpGs are covered. Below the threshold, scores are reported as `NA`. |
+| `--min-cells-per-group` | no | `10` | A `(feature, group)` reports `jsd` only if at least this many cells pass the per-cell coverage filter in that group. |
 | `--i-max-lag` | no | `3` | Maximum CpG lag k for `I_total = sum_{k=1..max} I_k`. |
 | `--threads` | no | `0` (all) | Number of threads. |
 
@@ -126,7 +127,7 @@ One row per `(feature, group)`:
 feature_id  group  n_cells  mean_coverage  jsd
 ```
 
-JSD is computed across the cells in each group. Pooled JSD across groups is not reported; per-group is the only meaningful axis for heterogeneity.
+JSD is computed across the cells in each group using each cell's lag-1 2-mer distribution. Pooled JSD across groups is not reported; per-group is the only meaningful axis for heterogeneity. If a group has fewer than `--min-cells-per-group` eligible cells, `jsd` is reported as `NA`.
 
 ## Scores
 
@@ -141,9 +142,9 @@ I_total = sum over k=1..k_max of I_k
 
 For an i.i.d. sequence with marginal p, every I_k = 0 regardless of p, so I_total has a p-invariant zero baseline. No adjustment for marginal methylation is needed.
 
-### Across-cell, per group: `JSD`
+### Across-cell, per group: `JSD` (lag-1 2-mer)
 
-For each cell, build a 2-mer histogram per feature (4 bins: 00, 01, 10, 11). Compute Jensen-Shannon divergence across the cells in each group. JSD is reported per (feature, group), not pooled.
+For each cell, build a lag-1 2-mer histogram per feature (4 bins: 00, 01, 10, 11). Compute Jensen-Shannon divergence across the cells in each group. JSD is reported per (feature, group), not pooled.
 
 ## Simulator
 

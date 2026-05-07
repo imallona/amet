@@ -31,10 +31,12 @@ show_plot <- function(name, caption = NULL) {
 
 # About this report
 
-amet computes two scores from single-cell DNA methylation data:
+amet computes two primary scores from single-cell DNA methylation data:
 
-- **I_norm** (within-cell): how predictable consecutive CpGs are inside one cell, normalised by what is achievable at that marginal methylation. Zero means no comethylation; higher means cleaner patterns. Defined as `I_norm = I_total / (k_max · H(p̂))`, where `I_total = sum_{k=1..k_max} I_k` is the cumulative mutual information across CpG lags and `H(p̂)` is the marginal Shannon entropy.
-- **JSD** (across-cell, per group): how much cells in the same group disagree with each other. Zero means cells look the same; higher means cells differ.
+- **I_total** (within-cell): cumulative mutual information across CpG lags, `I_total = sum_{k=1..k_max} I_k`.
+- **JSD** (across-cell, per group): Jensen-Shannon divergence over per-cell lag-1 2-mer distributions.
+
+For analysis and benchmarking, this report also shows normalised variants (`I_norm`, `JSD_norm`) to study marginal-methylation effects.
 
 This report runs amet on synthetic data with known properties and checks that the scores behave as expected.
 
@@ -147,7 +149,7 @@ JSD on small groups overestimates the true divergence because of finite-sample e
 show_plot("n_cells")
 ```
 
-This informs the recommended `--min-cells-per-group` setting in the CLI.
+This informs the `--min-cells-per-group` setting in the CLI.
 
 # Recovery of within-cell variability index (wcVI)
 
@@ -187,7 +189,7 @@ show_plot("benchmark_summary")
 
 # Tool comparison: amet vs scMET vs epiCHAOS
 
-Head-to-head benchmark on the same wcVI and acVI sweeps. Recovery is measured by the absolute Spearman correlation between each tool's score and the true index. Bars are coloured by tool family: amet (green) outputs the marginal-normalised `i_norm` and `jsd_norm`; scMET (orange) returns posterior medians of `mu`, `gamma`, `epsilon`; epiCHAOS (purple) returns `eITH` (`het.raw`).
+Head-to-head benchmark on the same wcVI and acVI sweeps. Recovery is measured by the absolute Spearman correlation between each tool's score and the true index. Bars are coloured by tool family: amet (green) includes `i_norm` plus a benchmark-only normalised `jsd_norm` derivative of amet's reported JSD; scMET (orange) returns posterior medians of `mu`, `gamma`, `epsilon`; epiCHAOS (purple) returns `eITH` (`het.raw`).
 
 ```{r tool_comparison, results = "asis"}
 show_plot("tool_comparison")
@@ -195,9 +197,9 @@ show_plot("tool_comparison")
 
 CPU time and peak memory come from snakemake's `benchmark:` directive, recorded once per sweep.
 
-Headline observations from the recovery panel:
+Headline observations from the recovery panel (under this benchmark setup):
 
-- **wcVI axis**: amet's `i_norm` recovers the true ranking near-perfectly. scMET's `epsilon` and `gamma` come close; scMET's `mu` is essentially uninformative because the wcVI sweep holds the marginal nearly fixed within each group. epiCHAOS's Jaccard-based `eITH` shows weak signal because Jaccard is largely blind to within-cell spatial structure.
-- **acVI axis**: amet's `jsd_norm` is the best recoverer. scMET cannot detect across-cell variability when marginals are held flat. epiCHAOS's `eITH` is near-zero because cells in the same acVI group share their marginal and the Jaccard distance collapses on permutation.
+- **wcVI axis**: amet's `i_norm` recovers the true ranking near-perfectly. scMET's `epsilon` and `gamma` come close; scMET's `mu` is less informative because the wcVI sweep holds the marginal nearly fixed within each group. epiCHAOS's Jaccard-based `eITH` shows weaker signal.
+- **acVI axis**: amet's `jsd_norm` is the strongest recoverer in this setup. The external tools are run through adaptor scripts and should be interpreted as proxy comparisons rather than exhaustive fairness-optimised tuning.
 
 CPU and peak memory bars come from snakemake's `benchmark:` directive on each tool's run rule.

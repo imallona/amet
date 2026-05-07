@@ -45,7 +45,18 @@ rownames(mat) <- cell_keys
 message(sprintf("[run_epichaos] matrix dim = %d x %d, NA fraction = %.3f",
                 nrow(mat), ncol(mat), mean(is.na(mat))))
 
-mat[is.na(mat)] <- 0L
+## Impute missing CpGs by row-wise methylation rate instead of forcing NA -> 0.
+impute_row <- function(x) {
+    miss <- is.na(x)
+    if (!any(miss)) return(as.integer(x))
+    p <- mean(x, na.rm = TRUE)
+    if (!is.finite(p)) p <- 0.5
+    x[miss] <- as.integer(runif(sum(miss)) < p)
+    as.integer(x)
+}
+set.seed(42)
+mat <- t(apply(mat, 1, impute_row))
+
 meta <- data.frame(cell_id = manifest$cell_id, group = manifest$group,
                    row.names = manifest$cell_id, stringsAsFactors = FALSE)
 

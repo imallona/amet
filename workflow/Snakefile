@@ -407,12 +407,14 @@ rule run_amet_n_cells_sweep:
         prefix = op.join(SIM, "amet", "n_cells_sweep", "n_cells_sweep"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
+        min_cells = 2,
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} --cpg-reference {input.cpgs} --features {input.bed} \
             --cells {input.manifest} --output-prefix {params.prefix} \
-            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs}
+            --i-max-lag {params.i_max_lag} --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group {params.min_cells}
         """
 
 

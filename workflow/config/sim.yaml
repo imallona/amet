@@ -10,3 +10,4 @@ sim:
 amet:
   i_max_lag: 3
   min_cpgs_per_feature: 5
+  min_cells_per_group: 10

@@ -12,7 +12,7 @@ source(file.path(.this_dir, "mix_markovs.R"))
 
 build_components <- function(K) {
     ## K components evenly spaced across the persistence axis at fixed pi_1 = 0.5.
-    ## c values from 0.30 to 0.90 (anti-persistent → strongly persistent).
+    ## c values from 0.30 to 0.90 (anti-persistent -> strongly persistent).
     cs <- seq(0.30, 0.90, length.out = K)
     lapply(cs, function(c) list(p00 = c, p11 = c))
 }
@@ -42,7 +42,8 @@ cell_ids <- character(); groups <- character(); paths <- character()
 
 for (K in ks) {
     components <- build_components(K)
-    out <- simulate_mixture_cells(opt$n_cells_per_k, opt$n_cpgs, components)
+    out <- simulate_mixture_cells(opt$n_cells_per_k, opt$n_cpgs, components,
+                                  seed = opt$seed + K)
     for (i in seq_along(out$cells)) {
         id <- sprintf("K%d_cell%d", K, i)
         path <- file.path(cells_dir, sprintf("%s.allc.tsv.gz", id))

@@ -202,8 +202,16 @@ fn main() -> Result<()> {
         let i_vals = feat_to_group_itotal.get(&key);
         let (meth_mean, meth_var) = mean_var(meth_vals);
         let (i_mean, i_var) = mean_var(i_vals);
-        let jsd = multi_jsd(cells);
-        write!(feat_writer, "{}\t{}\t{}\t{:.6}\t", key.0, key.1, n_cells, mean_cov)?;
+        let jsd = if n_cells >= cli.min_cells_per_group as u64 {
+            Some(multi_jsd(cells))
+        } else {
+            None
+        };
+        write!(
+            feat_writer,
+            "{}\t{}\t{}\t{:.6}\t",
+            key.0, key.1, n_cells, mean_cov
+        )?;
         write_opt(&mut feat_writer, meth_mean)?;
         write!(feat_writer, "\t")?;
         write_opt(&mut feat_writer, meth_var)?;
@@ -211,7 +219,9 @@ fn main() -> Result<()> {
         write_opt(&mut feat_writer, i_mean)?;
         write!(feat_writer, "\t")?;
         write_opt(&mut feat_writer, i_var)?;
-        writeln!(feat_writer, "\t{:.6}", jsd)?;
+        write!(feat_writer, "\t")?;
+        write_opt(&mut feat_writer, jsd)?;
+        writeln!(feat_writer)?;
     }
 
     eprintln!(

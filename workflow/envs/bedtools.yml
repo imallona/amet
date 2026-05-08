@@ -5,7 +5,10 @@ channels:
 dependencies:
   - bedtools
   - curl
+  - wget
+  - tar
   - gzip
   - sed
   - gawk
   - coreutils
+  - entrez-direct

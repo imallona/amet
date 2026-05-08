@@ -233,7 +233,7 @@ rule ecker_make_genes_bed:
     output:
         bed = op.join(ECKER_RUN, "beds", "genes.bed"),
     params:
-        url = "http://hgdownload.cse.ucsc.edu/goldenpath/mm10/database/refGene.txt.gz",
+        url = "https://hgdownload.cse.ucsc.edu/goldenpath/mm10/database/refGene.txt.gz",
         n_max = config["prototype"]["features_subset"],
     log:
         op.join(ECKER_RUN, "logs", "make_genes.log"),

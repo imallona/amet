@@ -141,7 +141,7 @@ rule crc_make_cgi_bed:
     output:
         bed = op.join(CRC_RUN, "beds", "cpgIslands.bed"),
     params:
-        url = "http://hgdownload.cse.ucsc.edu/goldenpath/hg19/database/cpgIslandExt.txt.gz",
+        url = "https://hgdownload.cse.ucsc.edu/goldenpath/hg19/database/cpgIslandExt.txt.gz",
         n_max = config["prototype"]["features_subset"],
     log:
         op.join(CRC_RUN, "logs", "make_cgi.log"),

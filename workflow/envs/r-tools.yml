@@ -16,6 +16,7 @@ dependencies:
   - r-uwot
   - r-viridis
   - r-ggrepel
+  - r-reshape2
   - r-remotes
   - r-rmarkdown
   - r-knitr

@@ -106,7 +106,7 @@ case "$dataset" in
         echo "[sync] pulling paper supplement xlsx"
         rsync -av "$host:$meta_remote" "$out_root/$(basename "$meta_remote")"
         echo "[sync] pulling original NeMo MOp_Metadata.tsv.gz"
-        rsync -av "$host:$nemo_meta_remote" "$out_root/MOp_Metadata.tsv.gz"
+        rsync -av "$host:$nemo_meta_remote" "$out_root/nemo_meta.tsv.gz"
 
         ## Pull a small fixed slice of tars (alphabetic head). The amet
         ## workflow's manifest rule merges xlsx+NeMo TSV downstream and

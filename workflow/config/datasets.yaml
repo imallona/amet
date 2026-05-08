@@ -6,7 +6,7 @@
 
 prototype:
   enabled: true
-  cells_per_group: 10
+  cells_per_group: 2            # tiny default for laptop smoke-tests; bump for real prototype runs
   features_subset: 200          # take first N intervals of each feature BED
 
 barbara:
@@ -28,10 +28,13 @@ argelaguet:
     - Rostral_neurectoderm
 
 ecker:
+  run_name: ecker_proto
   group_column: sub_type
   raw_remote: /home/imallona/src/yamet/workflow/data/brain/raw
   meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
+  nemo_meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/MOp_Metadata.tsv.gz
   assembly: mm10
+  window_size: 100000
   region_filter: MOp
   proto_cell_types:
     - L23-IT
@@ -40,12 +43,13 @@ ecker:
     - CGE-Vip-Ccser1
 
 crc:
+  run_name: crc_proto
   group_column: location
   raw_remote: /home/imallona/src/yamet/workflow/data/crc/raw
   assembly: hg19
+  window_size: 100000
   proto_patients:
     - CRC01
-    - CRC02
   proto_locations:
     - NC
     - PT
@@ -54,8 +58,7 @@ crc:
 amet:
   i_max_lag: 3
   min_cpgs_per_feature: 5
-  # prototype scope: lowered to 3 because chr19+200-feature subset gives
-  # at most a handful of covered cells per (peak, group). Set back to 10
-  # (or higher) for the full-scale run.
-  min_cells_per_group: 3
+  # prototype scope: lowered to 2 for laptop smoke-tests with cells_per_group=2.
+  # Set back to 10 (or higher) for the full-scale run.
+  min_cells_per_group: 2
   meth_call_threshold: 0.1

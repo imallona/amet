@@ -208,7 +208,7 @@ rule render_argelaguet_report:
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet_paper.Rmd"),
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet.Rmd"),
         feat_cell_feature = op.join(ARG_RUN, ARG_RUN_NAME + ".features.cell_feature.tsv.gz"),
         feat_feature = op.join(ARG_RUN, ARG_RUN_NAME + ".features.feature.tsv.gz"),
         feat_bed = op.join(ARG_RUN, "beds", "gastro_features.bed"),

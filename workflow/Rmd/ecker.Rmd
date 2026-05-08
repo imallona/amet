@@ -1,0 +1,635 @@
+---
+title: "amet on Liu 2021 mouse brain CEMBA (MOp)"
+author: "Izaskun Mallona"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    number_sections: true
+    df_print: default
+params:
+  feat_cell_feature: ""
+  feat_feature: ""
+  feat_bed: ""
+  win_cell_feature: ""
+  win_feature: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 5, fig.height = 4)
+
+suppressPackageStartupMessages({
+    library(data.table)
+    library(ggplot2)
+    library(ggridges)
+    library(ggrepel)
+    library(viridis)
+    library(patchwork)
+    library(dplyr)
+    library(tidyr)
+    library(uwot)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+
+panels_dir <- file.path(params$out_dir, "panels")
+feat_dir <- file.path(panels_dir, "feature")
+win_dir <- file.path(panels_dir, "window")
+dir.create(feat_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(win_dir, showWarnings = FALSE, recursive = TRUE)
+```
+
+# Inputs and design
+
+CEMBA mouse motor cortex (MOp) prototype: chr19, four cell types from the 4587-cell atlas. Per-cell raw files are methylpy allc tsv.gz, read by amet's allc parser via per-tar extraction.
+
+The report is split into two analyses with disjoint feature definitions:
+
+- **Feature-based**: amet outputs over genes on chr19. One feature = one gene locus. Used to look at CpG-context regularity inside transcribed loci, contrasted across cell types.
+- **Window-based**: amet outputs over fixed-size genome tiles on chr19. One feature = one window. Used for cell-level summaries and embeddings without locus-bias.
+
+Score mapping: amet `i_total` (within-cell mutual information across CpG lags) for adjS-like questions; amet `jsd` (across-cell heterogeneity) for adjH-like questions.
+
+```{r load}
+man <- fread(params$manifest)
+feat_cf <- fread(params$feat_cell_feature)
+feat_fe <- fread(params$feat_feature)
+win_cf <- fread(params$win_cell_feature)
+win_fe <- fread(params$win_feature)
+feat_bed <- fread(params$feat_bed, header = FALSE,
+                  col.names = c("chrom", "start", "end", "feature_id"))
+win_bed <- fread(params$win_bed, header = FALSE,
+                 col.names = c("chrom", "start", "end", "feature_id"))
+
+# group is sub_type. Pass-through extras (cell_class, major_type) are kept if
+# present on the manifest.
+extra_cols <- intersect(c("cell_class", "major_type", "region", "sub_region"),
+                        colnames(man))
+keep <- c("cell_id", "group", extra_cols)
+man <- man[, ..keep]
+
+feat_cf <- merge(feat_cf, man, by = c("cell_id", "group"), all.x = TRUE)
+win_cf <- merge(win_cf, man, by = c("cell_id", "group"), all.x = TRUE)
+group_levels <- sort(unique(man$group))
+ng <- length(group_levels)
+celltype_pal <- setNames(viridis::viridis(ng, end = 0.95), group_levels)
+```
+
+# Sample sizes and coverage
+
+```{r sizes, fig.width = 6, fig.height = 3.5}
+sz <- man[, .(cells = .N), by = group][order(group)]
+print(sz)
+
+p_n <- ggplot(sz, aes(x = group, y = cells, fill = group)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = NULL, y = "cells") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_n, sz, file.path(panels_dir, "ncells_per_group"),
+          width_mm = 90, height_mm = 60)
+p_n
+```
+
+```{r coverage, fig.width = 7, fig.height = 3.5}
+cov_feat <- feat_cf[, .(n_features = .N,
+                        median_n_cpgs = median(n_cpgs, na.rm = TRUE)),
+                    by = .(cell_id, group)]
+cov_win <- win_cf[, .(n_windows = .N,
+                      median_n_cpgs = median(n_cpgs, na.rm = TRUE)),
+                  by = .(cell_id, group)]
+cov_long <- rbind(
+    cov_feat[, .(cell_id, group, n = n_features, scope = "feature (gene)")],
+    cov_win[,  .(cell_id, group, n = n_windows,  scope = "window")]
+)
+p_cov <- ggplot(cov_long, aes(x = group, y = n, fill = group)) +
+    geom_violin(alpha = 0.6, scale = "width") +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white") +
+    scale_fill_manual(values = celltype_pal) +
+    facet_wrap(~ scope, scales = "free_y") +
+    labs(x = NULL, y = "covered features per cell") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_cov, cov_long, file.path(panels_dir, "coverage_per_cell"),
+          width_mm = 130, height_mm = 70)
+p_cov
+```
+
+# Feature-based analysis: gene loci on chr19
+
+```{r feat_filter}
+fcf <- feat_cf[!is.na(i_total)]
+ffe <- feat_fe[!is.na(jsd)]
+ffe[, group := factor(group, levels = group_levels)]
+```
+
+## Within-cell regularity (i_total)
+
+### Per-cell-type distribution
+
+```{r feat_itotal_box, fig.width = 6, fig.height = 4}
+p_itotal_box <- ggplot(fcf, aes(x = group, y = i_total, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                 linewidth = 0.3) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = NULL, y = expression(i[total])) +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_itotal_box, fcf[, .(cell_id, group, feature_id, i_total)],
+          file.path(feat_dir, "itotal_by_group"),
+          width_mm = 110, height_mm = 70)
+p_itotal_box
+```
+
+### Density ridges per cell type
+
+```{r feat_itotal_ridge, fig.width = 6, fig.height = 4}
+p_ridge <- ggplot(fcf, aes(x = i_total, y = group, fill = group)) +
+    geom_density_ridges(alpha = 0.7, scale = 1.2, linewidth = 0.3) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = expression(i[total]), y = NULL) +
+    theme_ng() +
+    theme(legend.position = "none", aspect.ratio = NULL)
+save_eval(p_ridge, fcf[, .(group, i_total)],
+          file.path(feat_dir, "itotal_ridge_group"),
+          width_mm = 110, height_mm = 70)
+p_ridge
+```
+
+### Mean per cell
+
+```{r feat_itotal_per_cell, fig.width = 6, fig.height = 4}
+cell_summary_feat <- fcf[, .(mean_i_total = mean(i_total, na.rm = TRUE),
+                             median_i_total = median(i_total, na.rm = TRUE),
+                             mean_meth = mean(mean_meth, na.rm = TRUE),
+                             n_features = .N),
+                         by = .(cell_id, group)]
+p_cell_it <- ggplot(cell_summary_feat,
+                    aes(x = group, y = mean_i_total, fill = group)) +
+    geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.75) +
+    geom_jitter(width = 0.18, size = 0.6, alpha = 0.7) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = NULL, y = expression("mean " * i[total] * " per cell")) +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_cell_it, cell_summary_feat,
+          file.path(feat_dir, "itotal_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_cell_it
+```
+
+## Methylation per cell type
+
+```{r feat_meth, fig.width = 6, fig.height = 4}
+p_meth <- ggplot(cell_summary_feat,
+                 aes(x = group, y = mean_meth, fill = group)) +
+    geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.75) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = NULL, y = "mean methylation per cell (gene loci)") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_meth, cell_summary_feat,
+          file.path(feat_dir, "meanmeth_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_meth
+```
+
+## Decoupling: i_total vs methylation
+
+```{r feat_decouple, fig.width = 6, fig.height = 4}
+p_dec <- ggplot(fcf, aes(x = mean_meth, y = i_total, colour = group)) +
+    geom_point(size = 0.5, alpha = 0.5) +
+    geom_smooth(method = "loess", se = FALSE, linewidth = 0.4) +
+    scale_colour_manual(values = celltype_pal) +
+    labs(x = "mean methylation (per cell, per gene)",
+         y = expression(i[total]),
+         colour = "cell type") +
+    theme_ng()
+save_eval(p_dec, fcf[, .(cell_id, group, mean_meth, i_total)],
+          file.path(feat_dir, "itotal_vs_meth_scatter"),
+          width_mm = 110, height_mm = 70)
+p_dec
+```
+
+```{r feat_decouple_per_cell, fig.width = 5, fig.height = 4}
+p_dec_pc <- ggplot(cell_summary_feat,
+                   aes(x = mean_meth, y = mean_i_total, colour = group)) +
+    geom_point(size = 1.6, alpha = 0.9) +
+    scale_colour_manual(values = celltype_pal) +
+    labs(x = "mean methylation per cell",
+         y = expression("mean " * i[total] * " per cell")) +
+    theme_ng()
+save_eval(p_dec_pc, cell_summary_feat,
+          file.path(feat_dir, "itotal_vs_meth_per_cell"))
+p_dec_pc
+```
+
+## Across-cell heterogeneity (jsd)
+
+### Per-cell-type distribution
+
+```{r feat_jsd_box, fig.width = 6, fig.height = 4}
+if (nrow(ffe)) {
+    p_jsd_box <- ggplot(ffe, aes(x = group, y = jsd, fill = group)) +
+        geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+        geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                     linewidth = 0.3) +
+        scale_fill_manual(values = celltype_pal) +
+        labs(x = NULL, y = "jsd") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 30, hjust = 1),
+              legend.position = "none")
+    save_eval(p_jsd_box, ffe[, .(feature_id, group, n_cells, jsd)],
+              file.path(feat_dir, "jsd_by_group"),
+              width_mm = 110, height_mm = 70)
+    p_jsd_box
+}
+```
+
+### Density ridges
+
+```{r feat_jsd_ridge, fig.width = 6, fig.height = 4}
+if (exists("p_jsd_box")) {
+    p_jsd_ridge <- ggplot(ffe, aes(x = jsd, y = group, fill = group)) +
+        geom_density_ridges(alpha = 0.7, scale = 1.1, linewidth = 0.3) +
+        scale_fill_manual(values = celltype_pal) +
+        labs(x = "jsd", y = NULL) +
+        theme_ng() +
+        theme(legend.position = "none", aspect.ratio = NULL)
+    save_eval(p_jsd_ridge, ffe[, .(group, jsd)],
+              file.path(feat_dir, "jsd_ridge_group"),
+              width_mm = 110, height_mm = 70)
+    p_jsd_ridge
+}
+```
+
+## Joint structure: i_total vs jsd per gene
+
+```{r feat_joint, fig.width = 5, fig.height = 4}
+fe_joint <- fcf[, .(median_i_total = median(i_total, na.rm = TRUE)),
+                by = .(feature_id, group)]
+fe_joint <- merge(fe_joint, ffe[, .(feature_id, group, jsd, n_cells)],
+                  by = c("feature_id", "group"))
+fe_joint <- fe_joint[!is.na(jsd) & !is.na(median_i_total)]
+p_joint <- ggplot(fe_joint,
+                  aes(x = jsd, y = median_i_total, colour = group)) +
+    geom_point(size = 0.7, alpha = 0.85) +
+    scale_colour_manual(values = celltype_pal) +
+    labs(x = "jsd (per gene, per cell type)",
+         y = expression("median " * i[total]),
+         colour = "cell type") +
+    theme_ng()
+save_eval(p_joint, fe_joint, file.path(feat_dir, "itotal_vs_jsd_per_feature"))
+p_joint
+```
+
+## Heatmap: median i_total per (gene, cell type)
+
+```{r feat_heatmap_it, fig.width = 5, fig.height = 6}
+hm <- dcast(fcf[, .(median_i_total = median(i_total, na.rm = TRUE)),
+                by = .(feature_id, group)],
+            feature_id ~ group, value.var = "median_i_total")
+hm_mat <- as.matrix(hm[, -1])
+rownames(hm_mat) <- hm$feature_id
+hm_mat <- hm_mat[rowSums(!is.na(hm_mat)) >= 2, , drop = FALSE]
+hm_mat <- hm_mat[order(rowMeans(hm_mat, na.rm = TRUE)), , drop = FALSE]
+hm_long <- as.data.table(reshape2::melt(hm_mat,
+                                        varnames = c("feature_id", "group")))
+hm_long[, feature_id := factor(feature_id, levels = rownames(hm_mat))]
+
+p_hm_it <- ggplot(hm_long, aes(x = group, y = feature_id, fill = value)) +
+    geom_tile() +
+    scale_fill_viridis(option = "magma", na.value = "grey90") +
+    labs(x = NULL, y = "gene", fill = expression(i[total])) +
+    theme_ng() +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+          axis.text.x = element_text(angle = 30, hjust = 1),
+          aspect.ratio = NULL)
+save_eval(p_hm_it, hm_long, file.path(feat_dir, "heatmap_median_itotal"),
+          width_mm = 90, height_mm = 130)
+p_hm_it
+```
+
+## Heatmap: jsd per (gene, cell type)
+
+```{r feat_heatmap_jsd, fig.width = 5, fig.height = 6}
+if (nrow(ffe)) {
+    jsd_w <- dcast(ffe, feature_id ~ group, value.var = "jsd")
+    jsd_mat <- as.matrix(jsd_w[, -1])
+    rownames(jsd_mat) <- jsd_w$feature_id
+    jsd_mat <- jsd_mat[rowSums(!is.na(jsd_mat)) >= 1, , drop = FALSE]
+    jsd_mat <- jsd_mat[order(rowMeans(jsd_mat, na.rm = TRUE)), , drop = FALSE]
+    jsd_long <- as.data.table(reshape2::melt(jsd_mat,
+                                             varnames = c("feature_id", "group")))
+    jsd_long[, feature_id := factor(feature_id, levels = rownames(jsd_mat))]
+
+    p_hm_jsd <- ggplot(jsd_long, aes(x = group, y = feature_id, fill = value)) +
+        geom_tile() +
+        scale_fill_viridis(option = "viridis", na.value = "grey90") +
+        labs(x = NULL, y = "gene", fill = "jsd") +
+        theme_ng() +
+        theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+              axis.text.x = element_text(angle = 30, hjust = 1),
+              aspect.ratio = NULL)
+    save_eval(p_hm_jsd, jsd_long, file.path(feat_dir, "heatmap_jsd"),
+              width_mm = 90, height_mm = 130)
+    p_hm_jsd
+}
+```
+
+## Top variable genes
+
+```{r feat_top_var, fig.width = 6, fig.height = 4}
+var_dt <- fcf[, .(sd_i_total = sd(i_total, na.rm = TRUE),
+                  median_i_total = median(i_total, na.rm = TRUE),
+                  n = .N), by = feature_id][n >= 5]
+top_var <- head(var_dt[order(-sd_i_total)], 20)
+
+p_top_var <- ggplot(top_var,
+                    aes(x = reorder(feature_id, sd_i_total), y = sd_i_total)) +
+    geom_col(fill = "#444444") +
+    coord_flip() +
+    labs(x = NULL, y = expression("sd(" * i[total] * ") across cells")) +
+    theme_ng() +
+    theme(axis.text.y = element_text(size = 6), aspect.ratio = NULL)
+save_eval(p_top_var, top_var, file.path(feat_dir, "top_variable_genes"),
+          width_mm = 110, height_mm = 80)
+p_top_var
+```
+
+# Window-based analysis: chr19 genome tiles
+
+```{r win_filter}
+wcf <- win_cf[!is.na(i_total)]
+wfe <- win_fe[!is.na(jsd)]
+wfe[, group := factor(group, levels = group_levels)]
+```
+
+## Per-cell coverage
+
+```{r win_coverage, fig.width = 6, fig.height = 4}
+win_cov <- win_cf[, .(n_windows = .N), by = .(cell_id, group)]
+p_win_cov <- ggplot(win_cov, aes(x = group, y = n_windows, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    geom_jitter(width = 0.15, size = 0.5, alpha = 0.6) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = NULL, y = "covered windows per cell") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_win_cov, win_cov, file.path(win_dir, "coverage_windows_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_win_cov
+```
+
+## Mean methylation per cell
+
+```{r win_meanmeth, fig.width = 6, fig.height = 4}
+cell_meth <- win_cf[!is.na(mean_meth),
+                    .(mean_meth = mean(mean_meth, na.rm = TRUE),
+                      n_windows = .N), by = .(cell_id, group)]
+p_wmeth <- ggplot(cell_meth, aes(x = group, y = mean_meth, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                 linewidth = 0.3) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = NULL, y = "mean methylation per cell (windows)") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_wmeth, cell_meth, file.path(win_dir, "meanmeth_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_wmeth
+```
+
+## Mean i_total per cell
+
+```{r win_itotal, fig.width = 6, fig.height = 4}
+cell_it <- wcf[, .(mean_i_total = mean(i_total, na.rm = TRUE),
+                   median_i_total = median(i_total, na.rm = TRUE),
+                   n_windows = .N), by = .(cell_id, group)]
+p_wit <- ggplot(cell_it, aes(x = group, y = mean_i_total, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                 linewidth = 0.3) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = NULL, y = expression("mean " * i[total] * " per cell")) +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_wit, cell_it, file.path(win_dir, "mean_itotal_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_wit
+```
+
+## Methylation vs i_total per cell
+
+```{r win_corr, fig.width = 5, fig.height = 4}
+cell_full <- merge(cell_meth, cell_it[, .(cell_id, mean_i_total)],
+                   by = "cell_id")
+p_wcorr <- ggplot(cell_full,
+                  aes(x = mean_meth, y = mean_i_total, colour = group)) +
+    geom_point(size = 1.6, alpha = 0.9) +
+    scale_colour_manual(values = celltype_pal) +
+    labs(x = "mean methylation per cell",
+         y = expression("mean " * i[total] * " per cell"),
+         colour = "cell type") +
+    theme_ng()
+save_eval(p_wcorr, cell_full, file.path(win_dir, "itotal_vs_meth_per_cell"))
+p_wcorr
+```
+
+## Window-level i_total and jsd ridges
+
+```{r win_ridges, fig.width = 6, fig.height = 4}
+p_w_it_r <- ggplot(wcf, aes(x = i_total, y = group, fill = group)) +
+    geom_density_ridges(alpha = 0.7, scale = 1.2, linewidth = 0.3) +
+    scale_fill_manual(values = celltype_pal) +
+    labs(x = expression(i[total] * " per (cell, window)"), y = NULL) +
+    theme_ng() +
+    theme(legend.position = "none", aspect.ratio = NULL)
+save_eval(p_w_it_r, wcf[, .(group, i_total)],
+          file.path(win_dir, "itotal_ridge_group"),
+          width_mm = 110, height_mm = 70)
+p_w_it_r
+```
+
+```{r win_jsd_ridges, fig.width = 6, fig.height = 4}
+if (nrow(wfe)) {
+    p_w_jsd_r <- ggplot(wfe, aes(x = jsd, y = group, fill = group)) +
+        geom_density_ridges(alpha = 0.7, scale = 1.1, linewidth = 0.3) +
+        scale_fill_manual(values = celltype_pal) +
+        labs(x = "jsd per (window, cell type)", y = NULL) +
+        theme_ng() +
+        theme(legend.position = "none", aspect.ratio = NULL)
+    save_eval(p_w_jsd_r, wfe[, .(group, jsd)],
+              file.path(win_dir, "jsd_ridge_group"),
+              width_mm = 110, height_mm = 70)
+    p_w_jsd_r
+}
+```
+
+## Cell embedding: PCA
+
+```{r win_build_mat}
+mat <- dcast(wcf, cell_id ~ feature_id, value.var = "i_total",
+             fun.aggregate = mean)
+mat_cells <- mat$cell_id
+mat <- as.matrix(mat[, -1])
+rownames(mat) <- mat_cells
+mat <- mat[, colSums(!is.na(mat)) >= 0.5 * nrow(mat), drop = FALSE]
+mat[is.na(mat)] <- 0
+cat("embedding matrix:", nrow(mat), "cells x", ncol(mat), "windows\n")
+```
+
+```{r win_pca, fig.width = 5, fig.height = 4}
+emb <- NULL
+if (ncol(mat) >= 2 && nrow(mat) >= 3) {
+    pcs <- prcomp(mat, scale. = FALSE)
+    emb <- data.table(cell_id = rownames(mat),
+                      PC1 = pcs$x[, 1], PC2 = pcs$x[, 2],
+                      PC3 = if (ncol(pcs$x) >= 3) pcs$x[, 3] else NA_real_)
+    emb <- merge(emb, man[, .(cell_id, group)], by = "cell_id")
+    p_pca <- ggplot(emb, aes(x = PC1, y = PC2, colour = group)) +
+        geom_point(size = 1.8, alpha = 0.95) +
+        scale_colour_manual(values = celltype_pal) +
+        labs(colour = "cell type") +
+        theme_ng()
+    save_eval(p_pca, emb, file.path(win_dir, "pca_group"))
+    p_pca
+}
+```
+
+```{r win_pca_scree, fig.width = 5, fig.height = 4}
+if (exists("pcs")) {
+    var_explained <- (pcs$sdev^2) / sum(pcs$sdev^2)
+    scree <- data.table(PC = seq_along(var_explained),
+                        var_explained = var_explained)[1:min(20, .N)]
+    p_scree <- ggplot(scree, aes(x = PC, y = var_explained)) +
+        geom_col(fill = "#444444") +
+        labs(x = "PC", y = "variance explained") +
+        theme_ng()
+    save_eval(p_scree, scree, file.path(win_dir, "pca_scree"))
+    p_scree
+}
+```
+
+```{r win_pc23, fig.width = 5, fig.height = 4}
+if (!is.null(emb) && !all(is.na(emb$PC3))) {
+    p_23 <- ggplot(emb, aes(x = PC2, y = PC3, colour = group)) +
+        geom_point(size = 1.8, alpha = 0.95) +
+        scale_colour_manual(values = celltype_pal) +
+        labs(colour = "cell type") +
+        theme_ng()
+    save_eval(p_23, emb, file.path(win_dir, "pca_pc2_pc3"))
+    p_23
+}
+```
+
+## Cell embedding: UMAP
+
+```{r win_umap, fig.width = 5, fig.height = 4}
+if (!is.null(emb) && nrow(mat) >= 5 && ncol(mat) >= 5) {
+    set.seed(1L)
+    n_neigh <- max(2L, min(15L, nrow(mat) - 1L))
+    um <- tryCatch(uwot::umap(mat, n_neighbors = n_neigh, min_dist = 0.3,
+                              n_components = 2, verbose = FALSE),
+                   error = function(e) { cat(conditionMessage(e), "\n"); NULL })
+    if (!is.null(um)) {
+        umd <- data.table(cell_id = rownames(mat),
+                          UMAP1 = um[, 1], UMAP2 = um[, 2])
+        umd <- merge(umd, man[, .(cell_id, group)], by = "cell_id")
+        p_um <- ggplot(umd, aes(x = UMAP1, y = UMAP2, colour = group)) +
+            geom_point(size = 1.8, alpha = 0.95) +
+            scale_colour_manual(values = celltype_pal) +
+            labs(colour = "cell type") +
+            theme_ng()
+        save_eval(p_um, umd, file.path(win_dir, "umap_group"))
+        p_um
+    }
+}
+```
+
+## Top variable windows
+
+```{r win_top_var, fig.width = 6, fig.height = 4}
+win_var <- wcf[, .(sd_i_total = sd(i_total, na.rm = TRUE),
+                   n = .N), by = feature_id][n >= 5]
+top_win <- head(win_var[order(-sd_i_total)], 20)
+p_win_top <- ggplot(top_win,
+                    aes(x = reorder(feature_id, sd_i_total), y = sd_i_total)) +
+    geom_col(fill = "#444444") +
+    coord_flip() +
+    labs(x = NULL, y = expression("sd(" * i[total] * ") across cells")) +
+    theme_ng() +
+    theme(axis.text.y = element_text(size = 6), aspect.ratio = NULL)
+save_eval(p_win_top, top_win, file.path(win_dir, "top_variable_windows"),
+          width_mm = 110, height_mm = 80)
+p_win_top
+```
+
+## Heatmap of top-variable windows by cell type
+
+```{r win_heatmap_top, fig.width = 5, fig.height = 5}
+top_ids <- top_win$feature_id
+hm_w <- dcast(wcf[feature_id %in% top_ids,
+                  .(median_i = median(i_total, na.rm = TRUE)),
+                  by = .(feature_id, group)],
+              feature_id ~ group, value.var = "median_i")
+hm_w_mat <- as.matrix(hm_w[, -1])
+rownames(hm_w_mat) <- hm_w$feature_id
+hm_w_long <- as.data.table(reshape2::melt(hm_w_mat,
+                                          varnames = c("feature_id", "group")))
+p_win_hm <- ggplot(hm_w_long, aes(x = group, y = feature_id, fill = value)) +
+    geom_tile() +
+    scale_fill_viridis(option = "magma", na.value = "grey90") +
+    labs(x = NULL, y = "window", fill = expression(i[total])) +
+    theme_ng() +
+    theme(axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(angle = 30, hjust = 1),
+          aspect.ratio = NULL)
+save_eval(p_win_hm, hm_w_long, file.path(win_dir, "heatmap_top_variable_windows"),
+          width_mm = 100, height_mm = 130)
+p_win_hm
+```
+
+# Combined paper figure
+
+```{r paper, fig.width = 11, fig.height = 7}
+panels <- list(
+    A = if (exists("p_itotal_box")) p_itotal_box + labs(title = "A. i_total / genes") else NULL,
+    B = if (exists("p_jsd_box")) p_jsd_box + labs(title = "B. jsd / genes") else NULL,
+    C = if (exists("p_dec")) p_dec + labs(title = "C. decoupling / genes") else NULL,
+    D = if (exists("p_wit")) p_wit + labs(title = "D. mean i_total per cell / windows") else NULL,
+    E = if (exists("p_pca")) p_pca + labs(title = "E. PCA cells / windows") else NULL,
+    F = if (exists("p_um")) p_um + labs(title = "F. UMAP cells / windows") else NULL
+)
+panels <- Filter(Negate(is.null), panels)
+if (length(panels) >= 2) {
+    combined <- Reduce(`+`, panels) + plot_layout(ncol = 3)
+    ggsave(file.path(panels_dir, "paper_figure.pdf"),
+           combined, width = 260, height = 160, units = "mm",
+           device = grDevices::cairo_pdf)
+    combined
+}
+```
+
+# Session
+
+```{r session}
+sessionInfo()
+```

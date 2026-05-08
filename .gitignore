@@ -6,6 +6,7 @@ method/target
 # Workflow outputs
 results/
 workflow/.snakemake/
+.snakemake/
 workflow/.Rhistory
 workflow/.RData
 

@@ -1,0 +1,675 @@
+---
+title: "amet on Argelaguet 2019 mouse gastrulation scNMT-seq"
+author: "Izaskun Mallona"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    number_sections: true
+    df_print: default
+params:
+  feat_cell_feature: ""
+  feat_feature: ""
+  feat_bed: ""
+  win_cell_feature: ""
+  win_feature: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 5, fig.height = 4)
+
+suppressPackageStartupMessages({
+    library(data.table)
+    library(ggplot2)
+    library(ggridges)
+    library(ggrepel)
+    library(viridis)
+    library(patchwork)
+    library(dplyr)
+    library(tidyr)
+    library(uwot)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+
+panels_dir <- file.path(params$out_dir, "panels")
+feat_dir <- file.path(panels_dir, "feature")
+win_dir <- file.path(panels_dir, "window")
+dir.create(feat_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(win_dir, showWarnings = FALSE, recursive = TRUE)
+
+recover_annotation <- function(fid) sub("_\\d+$", "", fid)
+```
+
+# Inputs and design
+
+Argelaguet et al. 2019 mouse gastrulation scNMT-seq, prototype run on chr19 with four lineages (Epiblast, Primitive_endoderm, Nascent_mesoderm, Rostral_neurectoderm). Per-cell raw files are scNMT cpg_level tsv.gz read by amet's scnmt parser.
+
+Two analyses with disjoint feature definitions:
+
+- **Feature-based**: amet outputs over gastrulation-specific BEDs (H3K27ac distal peaks for E7.5 ectoderm, endoderm, mesoderm; ESC p300 binding sites). Each feature carries an `<annotation>_<index>` id; the annotation prefix is recovered for stratified plots. This section asks where lineage-specific regulatory regions show distinct entropy.
+- **Window-based**: amet outputs over fixed-size genome tiles on chr19. One feature = one window. Used for cell-level summaries, embeddings, and stage-trajectory views without locus bias.
+
+Score mapping: amet `i_total` for adjS-like questions; amet `jsd` for adjH-like questions.
+
+```{r load}
+man <- fread(params$manifest)
+feat_cf <- fread(params$feat_cell_feature)
+feat_fe <- fread(params$feat_feature)
+win_cf <- fread(params$win_cell_feature)
+win_fe <- fread(params$win_feature)
+feat_bed <- fread(params$feat_bed, header = FALSE,
+                  col.names = c("chrom", "start", "end", "feature_id"))
+win_bed <- fread(params$win_bed, header = FALSE,
+                 col.names = c("chrom", "start", "end", "feature_id"))
+
+extra_cols <- intersect(c("stage", "embryo"), colnames(man))
+keep <- c("cell_id", "group", extra_cols)
+man <- man[, ..keep]
+
+feat_bed[, annotation := recover_annotation(feature_id)]
+feat_cf[, annotation := recover_annotation(feature_id)]
+feat_fe[, annotation := recover_annotation(feature_id)]
+
+feat_cf <- merge(feat_cf, man[, .(cell_id, stage = if ("stage" %in% colnames(man)) stage else NA)],
+                 by = "cell_id", all.x = TRUE)
+win_cf <- merge(win_cf, man[, .(cell_id, stage = if ("stage" %in% colnames(man)) stage else NA)],
+                by = "cell_id", all.x = TRUE)
+
+group_levels <- sort(unique(man$group))
+ng <- length(group_levels)
+lineage_pal <- setNames(viridis::viridis(ng, end = 0.92), group_levels)
+
+ann_levels <- sort(unique(feat_cf$annotation))
+```
+
+# Sample sizes and coverage
+
+```{r sizes, fig.width = 6, fig.height = 4}
+sz <- man[, .(cells = .N), by = group][order(group)]
+print(sz)
+p_n <- ggplot(sz, aes(x = group, y = cells, fill = group)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = lineage_pal) +
+    labs(x = NULL, y = "cells") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_n, sz, file.path(panels_dir, "ncells_per_group"),
+          width_mm = 90, height_mm = 60)
+p_n
+```
+
+```{r sizes_stage, fig.width = 7, fig.height = 4}
+if ("stage" %in% colnames(man)) {
+    ss <- man[!is.na(stage), .N, by = .(group, stage)]
+    p_ss <- ggplot(ss, aes(x = stage, y = N, fill = group)) +
+        geom_col(position = position_dodge(width = 0.85)) +
+        scale_fill_manual(values = lineage_pal) +
+        labs(x = NULL, y = "cells", fill = "lineage") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 30, hjust = 1))
+    save_eval(p_ss, ss, file.path(panels_dir, "ncells_per_stage_lineage"),
+              width_mm = 130, height_mm = 70)
+    p_ss
+}
+```
+
+```{r coverage, fig.width = 7, fig.height = 4}
+cov_feat <- feat_cf[, .(n_features = .N), by = .(cell_id, group)]
+cov_win <- win_cf[, .(n_windows = .N), by = .(cell_id, group)]
+cov_long <- rbind(
+    cov_feat[, .(cell_id, group, n = n_features, scope = "feature (regulatory)")],
+    cov_win[,  .(cell_id, group, n = n_windows,  scope = "window")]
+)
+p_cov <- ggplot(cov_long, aes(x = group, y = n, fill = group)) +
+    geom_violin(alpha = 0.6, scale = "width") +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white") +
+    scale_fill_manual(values = lineage_pal) +
+    facet_wrap(~ scope, scales = "free_y") +
+    labs(x = NULL, y = "covered features per cell") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_cov, cov_long, file.path(panels_dir, "coverage_per_cell"),
+          width_mm = 130, height_mm = 70)
+p_cov
+```
+
+# Feature-based analysis: regulatory regions
+
+```{r feat_filter}
+fcf <- feat_cf[!is.na(i_total)]
+ffe <- feat_fe[!is.na(jsd)]
+ffe[, group := factor(group, levels = group_levels)]
+```
+
+## i_total per (lineage, annotation)
+
+```{r feat_itotal_facet, fig.width = 9, fig.height = 4}
+p_itotal_facet <- ggplot(fcf, aes(x = group, y = i_total, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                 linewidth = 0.3) +
+    scale_fill_manual(values = lineage_pal) +
+    facet_wrap(~ annotation, nrow = 1) +
+    labs(x = NULL, y = expression(i[total])) +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+save_eval(p_itotal_facet,
+          fcf[, .(cell_id, group, annotation, feature_id, i_total)],
+          file.path(feat_dir, "itotal_by_group_annotation"),
+          width_mm = 200, height_mm = 70)
+p_itotal_facet
+```
+
+## i_total density ridges per lineage and annotation
+
+```{r feat_itotal_ridge, fig.width = 9, fig.height = 4}
+p_ridge_ann <- ggplot(fcf, aes(x = i_total, y = group, fill = group)) +
+    geom_density_ridges(alpha = 0.7, scale = 1.2, linewidth = 0.3) +
+    scale_fill_manual(values = lineage_pal) +
+    facet_wrap(~ annotation, nrow = 1) +
+    labs(x = expression(i[total]), y = NULL) +
+    theme_ng() +
+    theme(legend.position = "none", aspect.ratio = NULL)
+save_eval(p_ridge_ann, fcf[, .(group, annotation, i_total)],
+          file.path(feat_dir, "itotal_ridge_group_annotation"),
+          width_mm = 200, height_mm = 70)
+p_ridge_ann
+```
+
+## i_total per cell, per (lineage, annotation)
+
+```{r feat_per_cell, fig.width = 9, fig.height = 4}
+cell_feat <- fcf[, .(mean_i_total = mean(i_total, na.rm = TRUE),
+                     mean_meth = mean(mean_meth, na.rm = TRUE),
+                     n_features = .N),
+                 by = .(cell_id, group, annotation)]
+if ("stage" %in% colnames(man))
+    cell_feat <- merge(cell_feat, man[, .(cell_id, stage)], by = "cell_id")
+
+p_per_cell_ann <- ggplot(cell_feat,
+                         aes(x = group, y = mean_i_total, fill = group)) +
+    geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.75) +
+    geom_jitter(width = 0.18, size = 0.5, alpha = 0.7) +
+    scale_fill_manual(values = lineage_pal) +
+    facet_wrap(~ annotation, nrow = 1) +
+    labs(x = NULL, y = expression("mean " * i[total] * " per cell")) +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+save_eval(p_per_cell_ann, cell_feat,
+          file.path(feat_dir, "itotal_per_cell_annotation"),
+          width_mm = 200, height_mm = 70)
+p_per_cell_ann
+```
+
+## Stage trajectory of i_total per (lineage, annotation)
+
+```{r feat_stage, fig.width = 9, fig.height = 4}
+if ("stage" %in% colnames(cell_feat) && any(!is.na(cell_feat$stage))) {
+    p_stage_ann <- ggplot(cell_feat[!is.na(stage)],
+                          aes(x = stage, y = mean_i_total, fill = group)) +
+        geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.6,
+                     position = position_dodge(width = 0.85)) +
+        scale_fill_manual(values = lineage_pal) +
+        facet_wrap(~ annotation, nrow = 1) +
+        labs(x = NULL, y = expression("mean " * i[total] * " per cell"),
+             fill = "lineage") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 30, hjust = 1))
+    save_eval(p_stage_ann, cell_feat[!is.na(stage)],
+              file.path(feat_dir, "itotal_per_cell_stage_annotation"),
+              width_mm = 220, height_mm = 70)
+    p_stage_ann
+}
+```
+
+## Methylation per (lineage, annotation)
+
+```{r feat_meth, fig.width = 9, fig.height = 4}
+p_meth_ann <- ggplot(fcf, aes(x = group, y = mean_meth, fill = group)) +
+    geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.7) +
+    scale_fill_manual(values = lineage_pal) +
+    facet_wrap(~ annotation, nrow = 1) +
+    labs(x = NULL, y = "mean methylation (per cell, per region)") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+save_eval(p_meth_ann, fcf[, .(cell_id, group, annotation, mean_meth)],
+          file.path(feat_dir, "meanmeth_by_group_annotation"),
+          width_mm = 200, height_mm = 70)
+p_meth_ann
+```
+
+## Decoupling: i_total vs methylation
+
+```{r feat_decouple, fig.width = 9, fig.height = 4}
+p_dec_ann <- ggplot(fcf, aes(x = mean_meth, y = i_total, colour = group)) +
+    geom_point(size = 0.4, alpha = 0.5) +
+    geom_smooth(method = "loess", se = FALSE, linewidth = 0.4) +
+    scale_colour_manual(values = lineage_pal) +
+    facet_wrap(~ annotation, nrow = 1) +
+    labs(x = "mean methylation", y = expression(i[total])) +
+    theme_ng()
+save_eval(p_dec_ann,
+          fcf[, .(cell_id, group, annotation, mean_meth, i_total)],
+          file.path(feat_dir, "itotal_vs_meth_by_annotation"),
+          width_mm = 200, height_mm = 70)
+p_dec_ann
+```
+
+## jsd per (lineage, annotation)
+
+```{r feat_jsd, fig.width = 9, fig.height = 4}
+if (nrow(ffe)) {
+    p_jsd_ann <- ggplot(ffe, aes(x = group, y = jsd, fill = group)) +
+        geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+        geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                     linewidth = 0.3) +
+        scale_fill_manual(values = lineage_pal) +
+        facet_wrap(~ annotation, nrow = 1) +
+        labs(x = NULL, y = "jsd") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              legend.position = "none")
+    save_eval(p_jsd_ann, ffe[, .(feature_id, group, annotation, n_cells, jsd)],
+              file.path(feat_dir, "jsd_by_group_annotation"),
+              width_mm = 200, height_mm = 70)
+    p_jsd_ann
+}
+```
+
+## jsd density ridges per (lineage, annotation)
+
+```{r feat_jsd_ridge, fig.width = 9, fig.height = 4}
+if (nrow(ffe)) {
+    p_jsd_ridge_ann <- ggplot(ffe, aes(x = jsd, y = group, fill = group)) +
+        geom_density_ridges(alpha = 0.7, scale = 1.1, linewidth = 0.3) +
+        scale_fill_manual(values = lineage_pal) +
+        facet_wrap(~ annotation, nrow = 1) +
+        labs(x = "jsd", y = NULL) +
+        theme_ng() +
+        theme(legend.position = "none", aspect.ratio = NULL)
+    save_eval(p_jsd_ridge_ann, ffe[, .(group, annotation, jsd)],
+              file.path(feat_dir, "jsd_ridge_group_annotation"),
+              width_mm = 200, height_mm = 70)
+    p_jsd_ridge_ann
+}
+```
+
+## Joint structure: i_total vs jsd per (feature, lineage)
+
+```{r feat_joint, fig.width = 9, fig.height = 4}
+fe_joint <- fcf[, .(median_i_total = median(i_total, na.rm = TRUE)),
+                by = .(feature_id, annotation, group)]
+fe_joint <- merge(fe_joint, ffe[, .(feature_id, group, jsd, n_cells)],
+                  by = c("feature_id", "group"))
+fe_joint <- fe_joint[!is.na(jsd) & !is.na(median_i_total)]
+
+p_joint_ann <- ggplot(fe_joint,
+                      aes(x = jsd, y = median_i_total, colour = group)) +
+    geom_point(size = 0.7, alpha = 0.85) +
+    scale_colour_manual(values = lineage_pal) +
+    facet_wrap(~ annotation, nrow = 1) +
+    labs(x = "jsd (per region, per lineage)",
+         y = expression("median " * i[total]),
+         colour = "lineage") +
+    theme_ng()
+save_eval(p_joint_ann, fe_joint,
+          file.path(feat_dir, "itotal_vs_jsd_by_annotation"),
+          width_mm = 200, height_mm = 70)
+p_joint_ann
+```
+
+## Summary heatmap: median i_total per (annotation, lineage)
+
+```{r feat_summary_hm, fig.width = 6, fig.height = 4}
+sum_dt <- fcf[, .(median_i_total = median(i_total, na.rm = TRUE)),
+              by = .(annotation, group)]
+p_sum_hm <- ggplot(sum_dt, aes(x = group, y = annotation, fill = median_i_total)) +
+    geom_tile() +
+    scale_fill_viridis(option = "magma") +
+    labs(x = NULL, y = NULL, fill = expression("median " * i[total])) +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          aspect.ratio = NULL)
+save_eval(p_sum_hm, sum_dt, file.path(feat_dir, "summary_heatmap_itotal"),
+          width_mm = 110, height_mm = 70)
+p_sum_hm
+```
+
+## Summary heatmap: median jsd per (annotation, lineage)
+
+```{r feat_summary_jsd, fig.width = 6, fig.height = 4}
+if (nrow(ffe)) {
+    jsd_sum <- ffe[, .(median_jsd = median(jsd, na.rm = TRUE)),
+                   by = .(annotation, group)]
+    p_jsd_sum <- ggplot(jsd_sum,
+                        aes(x = group, y = annotation, fill = median_jsd)) +
+        geom_tile() +
+        scale_fill_viridis(option = "viridis") +
+        labs(x = NULL, y = NULL, fill = "median jsd") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 30, hjust = 1),
+              aspect.ratio = NULL)
+    save_eval(p_jsd_sum, jsd_sum,
+              file.path(feat_dir, "summary_heatmap_jsd"),
+              width_mm = 110, height_mm = 70)
+    p_jsd_sum
+}
+```
+
+# Window-based analysis: chr19 genome tiles
+
+```{r win_filter}
+wcf <- win_cf[!is.na(i_total)]
+wfe <- win_fe[!is.na(jsd)]
+wfe[, group := factor(group, levels = group_levels)]
+```
+
+## Per-cell coverage
+
+```{r win_coverage, fig.width = 6, fig.height = 4}
+p_win_cov <- ggplot(win_cf[, .(n_windows = .N), by = .(cell_id, group)],
+                    aes(x = group, y = n_windows, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    scale_fill_manual(values = lineage_pal) +
+    labs(x = NULL, y = "covered windows per cell") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_win_cov, win_cf[, .(cell_id, group)],
+          file.path(win_dir, "coverage_windows_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_win_cov
+```
+
+## Per-cell mean methylation
+
+```{r win_meanmeth, fig.width = 6, fig.height = 4}
+cell_meth <- win_cf[!is.na(mean_meth),
+                    .(mean_meth = mean(mean_meth, na.rm = TRUE),
+                      n_windows = .N), by = .(cell_id, group)]
+if ("stage" %in% colnames(man))
+    cell_meth <- merge(cell_meth, man[, .(cell_id, stage)], by = "cell_id")
+
+p_wmeth <- ggplot(cell_meth, aes(x = group, y = mean_meth, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                 linewidth = 0.3) +
+    scale_fill_manual(values = lineage_pal) +
+    labs(x = NULL, y = "mean methylation per cell (windows)") +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_wmeth, cell_meth, file.path(win_dir, "meanmeth_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_wmeth
+```
+
+## Per-cell mean i_total
+
+```{r win_itotal, fig.width = 6, fig.height = 4}
+cell_it <- wcf[, .(mean_i_total = mean(i_total, na.rm = TRUE),
+                   n_windows = .N), by = .(cell_id, group)]
+if ("stage" %in% colnames(man))
+    cell_it <- merge(cell_it, man[, .(cell_id, stage)], by = "cell_id")
+
+p_wit <- ggplot(cell_it, aes(x = group, y = mean_i_total, fill = group)) +
+    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
+                 linewidth = 0.3) +
+    scale_fill_manual(values = lineage_pal) +
+    labs(x = NULL, y = expression("mean " * i[total] * " per cell")) +
+    theme_ng() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "none")
+save_eval(p_wit, cell_it, file.path(win_dir, "mean_itotal_per_cell"),
+          width_mm = 110, height_mm = 70)
+p_wit
+```
+
+## Methylation vs i_total per cell
+
+```{r win_corr, fig.width = 5, fig.height = 4}
+cell_full <- merge(cell_meth, cell_it[, .(cell_id, mean_i_total)], by = "cell_id")
+p_wcorr <- ggplot(cell_full,
+                  aes(x = mean_meth, y = mean_i_total, colour = group)) +
+    geom_point(size = 1.6, alpha = 0.9) +
+    scale_colour_manual(values = lineage_pal) +
+    labs(x = "mean methylation per cell",
+         y = expression("mean " * i[total] * " per cell"),
+         colour = "lineage") +
+    theme_ng()
+save_eval(p_wcorr, cell_full, file.path(win_dir, "itotal_vs_meth_per_cell"))
+p_wcorr
+```
+
+## Stage trajectory at the cell level
+
+```{r win_stage, fig.width = 7, fig.height = 4}
+if ("stage" %in% colnames(cell_it) && any(!is.na(cell_it$stage))) {
+    p_stage_win <- ggplot(cell_it[!is.na(stage)],
+                          aes(x = stage, y = mean_i_total, fill = group)) +
+        geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.65,
+                     position = position_dodge(width = 0.85)) +
+        scale_fill_manual(values = lineage_pal) +
+        labs(x = NULL, y = expression("mean " * i[total] * " per cell"),
+             fill = "lineage") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 30, hjust = 1))
+    save_eval(p_stage_win, cell_it[!is.na(stage)],
+              file.path(win_dir, "itotal_per_cell_stage"),
+              width_mm = 140, height_mm = 70)
+    p_stage_win
+}
+```
+
+## Window-level i_total ridges per lineage
+
+```{r win_ridges, fig.width = 6, fig.height = 4}
+p_w_it_r <- ggplot(wcf, aes(x = i_total, y = group, fill = group)) +
+    geom_density_ridges(alpha = 0.7, scale = 1.2, linewidth = 0.3) +
+    scale_fill_manual(values = lineage_pal) +
+    labs(x = expression(i[total] * " per (cell, window)"), y = NULL) +
+    theme_ng() +
+    theme(legend.position = "none", aspect.ratio = NULL)
+save_eval(p_w_it_r, wcf[, .(group, i_total)],
+          file.path(win_dir, "itotal_ridge_group"),
+          width_mm = 110, height_mm = 70)
+p_w_it_r
+```
+
+## Window-level jsd ridges per lineage
+
+```{r win_jsd_ridges, fig.width = 6, fig.height = 4}
+if (nrow(wfe)) {
+    p_w_jsd_r <- ggplot(wfe, aes(x = jsd, y = group, fill = group)) +
+        geom_density_ridges(alpha = 0.7, scale = 1.1, linewidth = 0.3) +
+        scale_fill_manual(values = lineage_pal) +
+        labs(x = "jsd per (window, lineage)", y = NULL) +
+        theme_ng() +
+        theme(legend.position = "none", aspect.ratio = NULL)
+    save_eval(p_w_jsd_r, wfe[, .(group, jsd)],
+              file.path(win_dir, "jsd_ridge_group"),
+              width_mm = 110, height_mm = 70)
+    p_w_jsd_r
+}
+```
+
+## Cell embedding: PCA on cell-by-window i_total
+
+```{r win_build_mat}
+mat <- dcast(wcf, cell_id ~ feature_id, value.var = "i_total",
+             fun.aggregate = mean)
+mat_cells <- mat$cell_id
+mat <- as.matrix(mat[, -1])
+rownames(mat) <- mat_cells
+mat <- mat[, colSums(!is.na(mat)) >= 0.5 * nrow(mat), drop = FALSE]
+mat[is.na(mat)] <- 0
+cat("embedding matrix:", nrow(mat), "cells x", ncol(mat), "windows\n")
+```
+
+```{r win_pca, fig.width = 9, fig.height = 4}
+emb <- NULL
+if (ncol(mat) >= 2 && nrow(mat) >= 3) {
+    pcs <- prcomp(mat, scale. = FALSE)
+    emb <- data.table(cell_id = rownames(mat),
+                      PC1 = pcs$x[, 1], PC2 = pcs$x[, 2],
+                      PC3 = if (ncol(pcs$x) >= 3) pcs$x[, 3] else NA_real_)
+    emb <- merge(emb, man[, .(cell_id, group)], by = "cell_id")
+    if ("stage" %in% colnames(man))
+        emb <- merge(emb, man[, .(cell_id, stage)], by = "cell_id")
+
+    p_pca_lin <- ggplot(emb, aes(x = PC1, y = PC2, colour = group)) +
+        geom_point(size = 1.8, alpha = 0.95) +
+        scale_colour_manual(values = lineage_pal) +
+        labs(title = "PCA: lineage", colour = "lineage") +
+        theme_ng()
+    save_eval(p_pca_lin, emb, file.path(win_dir, "pca_lineage"))
+
+    if ("stage" %in% colnames(emb) && any(!is.na(emb$stage))) {
+        p_pca_stg <- ggplot(emb[!is.na(stage)],
+                            aes(x = PC1, y = PC2, colour = stage)) +
+            geom_point(size = 1.8, alpha = 0.95) +
+            labs(title = "PCA: stage") + theme_ng()
+        save_eval(p_pca_stg, emb[!is.na(stage)],
+                  file.path(win_dir, "pca_stage"))
+        print(p_pca_lin + p_pca_stg)
+    } else {
+        p_pca_lin
+    }
+}
+```
+
+```{r win_pca_scree, fig.width = 5, fig.height = 4}
+if (exists("pcs")) {
+    var_explained <- (pcs$sdev^2) / sum(pcs$sdev^2)
+    scree <- data.table(PC = seq_along(var_explained),
+                        var_explained = var_explained)[1:min(20, .N)]
+    p_scree <- ggplot(scree, aes(x = PC, y = var_explained)) +
+        geom_col(fill = "#444444") +
+        labs(x = "PC", y = "variance explained") +
+        theme_ng()
+    save_eval(p_scree, scree, file.path(win_dir, "pca_scree"))
+    p_scree
+}
+```
+
+## Cell embedding: UMAP
+
+```{r win_umap, fig.width = 9, fig.height = 4}
+if (!is.null(emb) && nrow(mat) >= 5 && ncol(mat) >= 5) {
+    set.seed(1L)
+    n_neigh <- max(2L, min(15L, nrow(mat) - 1L))
+    um <- tryCatch(uwot::umap(mat, n_neighbors = n_neigh, min_dist = 0.3,
+                              n_components = 2, verbose = FALSE),
+                   error = function(e) { cat(conditionMessage(e), "\n"); NULL })
+    if (!is.null(um)) {
+        umd <- data.table(cell_id = rownames(mat),
+                          UMAP1 = um[, 1], UMAP2 = um[, 2])
+        umd <- merge(umd, man[, .(cell_id, group)], by = "cell_id")
+        if ("stage" %in% colnames(man))
+            umd <- merge(umd, man[, .(cell_id, stage)], by = "cell_id")
+
+        p_um_lin <- ggplot(umd, aes(x = UMAP1, y = UMAP2, colour = group)) +
+            geom_point(size = 1.8, alpha = 0.95) +
+            scale_colour_manual(values = lineage_pal) +
+            labs(title = "UMAP: lineage", colour = "lineage") + theme_ng()
+        save_eval(p_um_lin, umd, file.path(win_dir, "umap_lineage"))
+
+        if ("stage" %in% colnames(umd) && any(!is.na(umd$stage))) {
+            p_um_stg <- ggplot(umd[!is.na(stage)],
+                               aes(x = UMAP1, y = UMAP2, colour = stage)) +
+                geom_point(size = 1.8, alpha = 0.95) +
+                labs(title = "UMAP: stage") + theme_ng()
+            save_eval(p_um_stg, umd[!is.na(stage)],
+                      file.path(win_dir, "umap_stage"))
+            print(p_um_lin + p_um_stg)
+        } else {
+            p_um_lin
+        }
+    }
+}
+```
+
+## Top variable windows
+
+```{r win_top_var, fig.width = 6, fig.height = 4}
+win_var <- wcf[, .(sd_i_total = sd(i_total, na.rm = TRUE), n = .N),
+               by = feature_id][n >= 5]
+top_win <- head(win_var[order(-sd_i_total)], 20)
+p_win_top <- ggplot(top_win,
+                    aes(x = reorder(feature_id, sd_i_total), y = sd_i_total)) +
+    geom_col(fill = "#444444") +
+    coord_flip() +
+    labs(x = NULL, y = expression("sd(" * i[total] * ") across cells")) +
+    theme_ng() +
+    theme(axis.text.y = element_text(size = 6), aspect.ratio = NULL)
+save_eval(p_win_top, top_win, file.path(win_dir, "top_variable_windows"),
+          width_mm = 110, height_mm = 80)
+p_win_top
+```
+
+## Heatmap of top-variable windows by lineage
+
+```{r win_heatmap, fig.width = 5, fig.height = 5}
+top_ids <- top_win$feature_id
+hm_w <- dcast(wcf[feature_id %in% top_ids,
+                  .(median_i = median(i_total, na.rm = TRUE)),
+                  by = .(feature_id, group)],
+              feature_id ~ group, value.var = "median_i")
+hm_w_mat <- as.matrix(hm_w[, -1])
+rownames(hm_w_mat) <- hm_w$feature_id
+hm_w_long <- as.data.table(reshape2::melt(hm_w_mat,
+                                          varnames = c("feature_id", "group")))
+p_win_hm <- ggplot(hm_w_long, aes(x = group, y = feature_id, fill = value)) +
+    geom_tile() +
+    scale_fill_viridis(option = "magma", na.value = "grey90") +
+    labs(x = NULL, y = "window", fill = expression(i[total])) +
+    theme_ng() +
+    theme(axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(angle = 30, hjust = 1),
+          aspect.ratio = NULL)
+save_eval(p_win_hm, hm_w_long,
+          file.path(win_dir, "heatmap_top_variable_windows"),
+          width_mm = 100, height_mm = 130)
+p_win_hm
+```
+
+# Combined paper figure
+
+```{r paper, fig.width = 12, fig.height = 8}
+panels <- list(
+    A = if (exists("p_itotal_facet")) p_itotal_facet + labs(title = "A. i_total / regions") else NULL,
+    B = if (exists("p_jsd_ann")) p_jsd_ann + labs(title = "B. jsd / regions") else NULL,
+    C = if (exists("p_wit")) p_wit + labs(title = "C. mean i_total per cell / windows") else NULL,
+    D = if (exists("p_pca_lin")) p_pca_lin + labs(title = "D. PCA cells / windows") else NULL,
+    E = if (exists("p_um_lin")) p_um_lin + labs(title = "E. UMAP cells / windows") else NULL,
+    F = if (exists("p_sum_hm")) p_sum_hm + labs(title = "F. summary / regions") else NULL
+)
+panels <- Filter(Negate(is.null), panels)
+if (length(panels) >= 2) {
+    combined <- Reduce(`+`, panels) + plot_layout(ncol = 3)
+    ggsave(file.path(panels_dir, "paper_figure.pdf"),
+           combined, width = 280, height = 180, units = "mm",
+           device = grDevices::cairo_pdf)
+    combined
+}
+```
+
+# Session
+
+```{r session}
+sessionInfo()
+```

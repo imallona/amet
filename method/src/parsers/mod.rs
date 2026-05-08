@@ -5,6 +5,7 @@
 //! and counts summed.
 
 pub mod allc;
+pub mod bismark;
 pub mod scnmt;
 
 use crate::MethCall;
@@ -16,6 +17,7 @@ use std::path::Path;
 pub enum CellFormat {
     Allc,
     Scnmt,
+    Bismark,
 }
 
 impl CellFormat {
@@ -23,6 +25,7 @@ impl CellFormat {
         match s.to_lowercase().as_str() {
             "allc" | "methylpy" => Some(Self::Allc),
             "scnmt" | "cpg_level" => Some(Self::Scnmt),
+            "bismark" | "singlec" => Some(Self::Bismark),
             _ => None,
         }
     }
@@ -35,6 +38,8 @@ impl CellFormat {
             .to_lowercase();
         if name.contains(".cpg_level.") || name.contains(".scnmt.") {
             Self::Scnmt
+        } else if name.contains(".singlec.") || name.contains(".bismark.") {
+            Self::Bismark
         } else {
             // allc is the most general single-cell format; default when nothing matches.
             Self::Allc
@@ -50,6 +55,7 @@ pub fn read_cell(
     match format {
         CellFormat::Allc => allc::read(path, reference),
         CellFormat::Scnmt => scnmt::read(path, reference),
+        CellFormat::Bismark => bismark::read(path, reference),
     }
 }
 
@@ -85,6 +91,16 @@ mod detection_tests {
     fn from_str_aliases() {
         assert_eq!(CellFormat::parse("ALLC"), Some(CellFormat::Allc));
         assert_eq!(CellFormat::parse("cpg_level"), Some(CellFormat::Scnmt));
+        assert_eq!(CellFormat::parse("Bismark"), Some(CellFormat::Bismark));
+        assert_eq!(CellFormat::parse("singleC"), Some(CellFormat::Bismark));
         assert_eq!(CellFormat::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn detect_bismark() {
+        assert_eq!(
+            CellFormat::detect_from_path(Path::new("GSM_xxx.singleC.txt.gz")),
+            CellFormat::Bismark
+        );
     }
 }

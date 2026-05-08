@@ -12,6 +12,10 @@ dependencies:
   - r-tidyr
   - r-patchwork
   - r-svglite
+  - r-ggridges
+  - r-uwot
+  - r-viridis
+  - r-ggrepel
   - r-remotes
   - r-rmarkdown
   - r-knitr

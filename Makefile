@@ -36,7 +36,14 @@ ACTIVATE := source $(CONDA_INIT) && conda activate $(CONDA_ENV) && \
 
 SNAKEMAKE := snakemake --use-conda --cores $(CORES) -p
 
-.PHONY: all simulations argelaguet crc ecker dryrun unlock clean help
+.PHONY: all simulations argelaguet crc ecker dryrun unlock clean help \
+        setup-barbara
+
+## Set up symlinks from results/{dataset}/ to the existing yamet data tree
+## on barbara so amet does not re-download or re-rsync anything. Run once
+## before `make all`. YAMET env var overrides the default ~/src/yamet/workflow.
+setup-barbara:
+	bash $(WORKFLOW_DIR)/scripts/setup_barbara_links.sh
 
 all: simulations argelaguet crc ecker
 

@@ -13,12 +13,26 @@ barbara:
   host: barbara
   user: imallona
 
+## Read-only data paths can be overridden to point directly at yamet's tree
+## on barbara, skipping any sync/symlink. Defaults below (empty strings) make
+## the smk rules fall back to <results>/<dataset>/<subdir>, the local layout
+## populated by sync_from_barbara.sh.
+
 argelaguet:
   run_name: argelaguet_proto
   group_column: lineage10x
   meta_remote: /home/imallona/src/yamet/workflow/argelaguet/sample_metadata.txt
   cpg_level_remote: /home/imallona/src/yamet/workflow/argelaguet/met/cpg_level
   features_remote: /home/imallona/src/yamet/workflow/argelaguet/features/genomic_contexts
+  ## Read-only path overrides. Set on barbara to point at yamet's tree:
+  ##   metadata_path: /home/imallona/src/yamet/workflow/argelaguet/sample_metadata.txt
+  ##   cells_dir:     /home/imallona/src/yamet/workflow/argelaguet/met/cpg_level
+  ##   features_dir:  /home/imallona/src/yamet/workflow/argelaguet/features/genomic_contexts
+  ##   mm10_dir:      /home/imallona/src/yamet/workflow/mm10
+  metadata_path: ""
+  cells_dir: ""
+  features_dir: ""
+  mm10_dir: ""
   assembly: mm10
   window_size: 100000
   proto_lineages:
@@ -33,6 +47,13 @@ ecker:
   raw_remote: /home/imallona/src/yamet/workflow/data/brain/raw
   meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
   nemo_meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/MOp_Metadata.tsv.gz
+  ## Read-only path overrides. Set on barbara to:
+  ##   raw_dir:        /home/imallona/src/yamet/workflow/data/brain/raw
+  ##   xlsx_path:      /home/imallona/src/yamet/workflow/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
+  ##   nemo_meta_path: /home/imallona/src/yamet/workflow/data/brain/raw/MOp_Metadata.tsv.gz
+  raw_dir: ""
+  xlsx_path: ""
+  nemo_meta_path: ""
   assembly: mm10
   window_size: 100000
   region_filter: MOp
@@ -47,6 +68,11 @@ crc:
   run_name: crc_proto
   group_column: location
   raw_remote: /home/imallona/src/yamet/workflow/data/crc/raw
+  ## Read-only path overrides. Set on barbara to:
+  ##   raw_dir: /home/imallona/src/yamet/workflow/data/crc/raw
+  ##   hg19_dir: /home/imallona/src/yamet/workflow/hg19
+  raw_dir: ""
+  hg19_dir: ""
   assembly: hg19
   window_size: 100000
   proto_patients:

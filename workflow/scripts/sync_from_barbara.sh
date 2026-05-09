@@ -55,7 +55,18 @@ case "$dataset" in
         echo "[sync] pulling gastrulation feature BEDs"
         rsync -av --include='*.bed' --exclude='*' "$host:$features_remote/" "$out_root/features/"
 
-        echo "[sync] argelaguet done: $(ls "$out_root/cells" | wc -l) cells, $(ls "$out_root/features"/*.bed 2>/dev/null | wc -l) BEDs"
+        echo "[sync] pulling mm10 generic BEDs (matches yamet's _ARGELAGUET_MM10_ANNOTATIONS)"
+        mkdir -p "$out_root/mm10"
+        rsync -av \
+            --include='h3k4me3.bed.gz' --include='h3k9me3.bed.gz' \
+            --include='h3k4me1.bed.gz' --include='h3k27me3.bed.gz' \
+            --include='h3k27ac.bed.gz' \
+            --include='genes.bed.gz' --include='lines.bed.gz' \
+            --include='sines.bed.gz' --include='promoters.bed.gz' \
+            --exclude='*' \
+            "$host:/home/imallona/src/yamet/workflow/mm10/" "$out_root/mm10/"
+
+        echo "[sync] argelaguet done: $(ls "$out_root/cells" | wc -l) cells, $(ls "$out_root/features"/*.bed 2>/dev/null | wc -l) gastro BEDs, $(ls "$out_root/mm10"/*.bed.gz 2>/dev/null | wc -l) mm10 BEDs"
         ;;
 
     crc)
@@ -112,7 +123,7 @@ case "$dataset" in
         ## workflow's manifest rule merges xlsx+NeMo TSV downstream and
         ## prunes anything not in proto_cell_types, so under-coverage of a
         ## given sub_type just yields a smaller manifest -- never an error.
-        n_tars=12
+        n_tars=60
         echo "[sync] pulling first $n_tars tars (alphabetic, smoke-test slice)"
         ssh "$host" "ls $raw_remote/*.tar | head -n $n_tars" \
           | xargs -I{} basename {} > "$out_root/cells_to_pull.txt"

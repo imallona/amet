@@ -26,6 +26,24 @@ ECKER_CELLS = op.join(ECKER_DATA, "cells")
 ECKER_RUN = op.join(RESULTS, config["ecker"]["run_name"])
 ECKER_RUN_NAME = config["ecker"]["run_name"]
 
+## yamet's nested ECKER_ANNOTATIONS dict (rules/ecker.smk in yamet). Annotation
+## name == wildcard {annotation}; outer key is unused at the wildcard level
+## (kept for parity).
+ECKER_ANNOTATIONS = {
+    "chip":      ["h3k4me3", "h3k9me3", "h3k27me3", "h3k4me1", "h3k27ac"],
+    "genes":     ["genes"],
+    "lines":     ["lines"],
+    "sines":     ["sines"],
+    "promoters": ["promoters"],
+}
+
+## Annotations whose source BED is built locally. Extend as more are added.
+_ECKER_LOCAL_ANN_NAMES = ["genes"]
+_ECKER_ALL_ANN_NAMES = sorted({a for cat in ECKER_ANNOTATIONS
+                               for a in ECKER_ANNOTATIONS[cat]})
+
+ECKER_STRATIFY_BY = ["sub_region", "sub_type"]
+
 
 rule ecker_download_nemo_metadata:
     """Cold-start: NeMo metadata TSV (cell -> tar URL mapping)."""
@@ -169,7 +187,7 @@ checkpoint ecker_make_manifest:
             --raw_dir {params.raw_dir} \
             --cells_dir {params.cells_dir} \
             --region {params.region} \
-            --proto_cell_types {params.proto_cell_types} \
+            --proto_cell_types "{params.proto_cell_types}" \
             --cells_per_group {params.cells_per_group} \
             --group_col {params.group_col} \
             --prototype {params.prototype} \
@@ -203,12 +221,12 @@ rule ecker_extract_tar:
 
 
 rule ecker_make_windows_bed:
-    """chr19 fixed-size windows on mm10. Output is in Ensembl naming (no chr
-    prefix) to match the cells; this also mirrors what argelaguet does."""
+    """Whole-genome fixed-size windows on mm10. Output is in Ensembl naming
+    (no chr prefix) to match the cells."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
-        sizes = op.join(REFS, "mm10_ucsc", "chr19.sizes"),
+        sizes = op.join(REFS, "mm10_ucsc", "genome.sizes"),
     output:
         bed = op.join(ECKER_RUN, "beds", "windows.bed"),
     params:
@@ -225,16 +243,14 @@ rule ecker_make_windows_bed:
 
 
 rule ecker_make_genes_bed:
-    """Whole-gene loci on mm10 chr19, Ensembl chrom naming, capped to
-    prototype.features_subset and stamped with feature_id. Pulls a small UCSC
-    track to avoid a heavyweight GTF dependency in the prototype."""
+    """Whole-gene loci on mm10, Ensembl chrom naming, stamped with feature_id.
+    Pulls a small UCSC track to avoid a heavyweight GTF dependency."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     output:
         bed = op.join(ECKER_RUN, "beds", "genes.bed"),
     params:
         url = "https://hgdownload.cse.ucsc.edu/goldenpath/mm10/database/refGene.txt.gz",
-        n_max = config["prototype"]["features_subset"],
     log:
         op.join(ECKER_RUN, "logs", "make_genes.log"),
     shell:
@@ -242,17 +258,16 @@ rule ecker_make_genes_bed:
         mkdir -p $(dirname {output.bed})
         curl -sSL {params.url} 2> {log} \
           | gunzip -c \
-          | awk 'BEGIN{{OFS="\t"}} $3 == "chr19" {{print "19", $5, $6, $13}}' \
+          | awk 'BEGIN{{OFS="\t"}}
+                 {{ chr=$3; sub(/^chr/, "", chr); print chr, $5, $6, $13 }}' \
           | sort -k1,1 -k2,2n -u \
-          | head -n {params.n_max} \
           | awk 'BEGIN{{OFS="\t"; k=0}} {{k++; print $1, $2, $3, "gene_" k}}' \
           > {output.bed} 2>> {log}
         """
 
 
-def _ecker_cell_tsvs(wildcards):
-    """Resolve per-cell tsv.gz paths from cells.tsv. Triggered through the
-    manifest checkpoint so DAG expansion happens after the manifest exists."""
+def _ecker_all_cell_tsvs(wildcards):
+    """All per-cell tsv.gz paths from the manifest checkpoint."""
     import csv
     manifest = checkpoints.ecker_make_manifest.get().output.manifest
     with open(manifest) as f:
@@ -260,30 +275,80 @@ def _ecker_cell_tsvs(wildcards):
         return [row["path"] for row in reader]
 
 
-rule ecker_run_amet_on_scope:
-    """Run amet on a {scope} BED. scope is 'windows' or 'genes'."""
+rule ecker_per_combo_manifest:
+    """Sub-manifest for one (sub_region, sub_type) combo. Mirrors yamet's
+    get_ecker_harmonized_files."""
+    conda:
+        op.join("..", "envs", "python.yml")
+    input:
+        cells = op.join(ECKER_DATA, "cells.tsv"),
+    output:
+        manifest = op.join(ECKER_DATA, "manifests",
+                           "{sub_region}_{sub_type}.tsv"),
+    params:
+        max_cells = config["prototype"]["cells_per_group"],
+    log:
+        op.join(ECKER_DATA, "logs",
+                "manifest_{sub_region}_{sub_type}.log"),
+    shell:
+        """
+        python {workflow.basedir}/scripts/ecker_subset_manifest.py \
+            --cells {input.cells} \
+            --sub-region {wildcards.sub_region} \
+            --sub-type {wildcards.sub_type} \
+            --max-cells {params.max_cells} \
+            --out {output.manifest} &> {log}
+        """
+
+
+def _ecker_combo_cell_tsvs(wildcards):
+    """Per-cell tsv.gz paths for one (sub_region, sub_type) combo. Reads the
+    per-combo sub-manifest produced by ecker_per_combo_manifest."""
+    import csv
+    sub_path = op.join(ECKER_DATA, "manifests",
+                       f"{wildcards.sub_region}_{wildcards.sub_type}.tsv")
+    if not op.exists(sub_path):
+        ## Snakemake hasn't built it yet; cell_files dependency is satisfied
+        ## at execution time via the manifest input dependency.
+        return []
+    with open(sub_path) as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        return [row["path"] for row in reader]
+
+
+rule run_amet_on_ecker_features:
+    """Run amet on one (annotation, sub_region, sub_type) combo. Mirrors
+    yamet's run_yamet_on_ecker_features wildcards exactly."""
     wildcard_constraints:
-        scope = "windows|genes",
+        annotation = "|".join(_ECKER_ALL_ANN_NAMES),
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
         binary = AMET,
-        cells = op.join(ECKER_DATA, "cells.tsv"),
-        cell_files = _ecker_cell_tsvs,
-        genome = op.join(REFS, "mm10_ensembl", "chr19.fa"),
-        bed = op.join(ECKER_RUN, "beds", "{scope}.bed"),
+        cells = op.join(ECKER_DATA, "manifests",
+                        "{sub_region}_{sub_type}.tsv"),
+        cell_files = _ecker_combo_cell_tsvs,
+        genome = op.join(REFS, "mm10_ensembl", "genome.fa"),
+        bed = op.join(ECKER_RUN, "beds", "{annotation}.bed"),
     output:
-        cell_feature = op.join(ECKER_RUN, ECKER_RUN_NAME + ".{scope}.cell_feature.tsv.gz"),
-        feature = op.join(ECKER_RUN, ECKER_RUN_NAME + ".{scope}.feature.tsv.gz"),
+        cell_feature = op.join(
+            ECKER_RUN, "features",
+            "{annotation}_{sub_region}_{sub_type}.cell_feature.tsv.gz"),
+        feature = op.join(
+            ECKER_RUN, "features",
+            "{annotation}_{sub_region}_{sub_type}.feature.tsv.gz"),
     params:
-        prefix = op.join(ECKER_RUN, ECKER_RUN_NAME + ".{scope}"),
+        prefix = op.join(
+            ECKER_RUN, "features",
+            "{annotation}_{sub_region}_{sub_type}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
         min_cells = config["amet"]["min_cells_per_group"],
         thresh = config["amet"]["meth_call_threshold"],
-    threads: min(workflow.cores, 8)
+    threads: min(workflow.cores, 4)
     log:
-        op.join(ECKER_RUN, "logs", "amet_{scope}.log"),
+        op.join(ECKER_RUN, "logs",
+                "amet_{annotation}_{sub_region}_{sub_type}.log"),
     shell:
         """
         mkdir -p $(dirname {params.prefix})
@@ -300,36 +365,84 @@ rule ecker_run_amet_on_scope:
         """
 
 
-rule ecker_render_report:
-    """Single paper-style report combining feature-level and window-level views."""
+rule run_amet_on_ecker_windows:
+    """Run amet on whole-genome windows over all cells (no per-stratum wildcards).
+    Mirrors yamet's run_yamet_on_ecker_windows."""
     conda:
-        op.join("..", "envs", "r-tools.yml")
+        op.join("..", "envs", "bedtools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker.Rmd"),
-        feat_cell_feature = op.join(ECKER_RUN, ECKER_RUN_NAME + ".genes.cell_feature.tsv.gz"),
-        feat_feature = op.join(ECKER_RUN, ECKER_RUN_NAME + ".genes.feature.tsv.gz"),
-        feat_bed = op.join(ECKER_RUN, "beds", "genes.bed"),
-        win_cell_feature = op.join(ECKER_RUN, ECKER_RUN_NAME + ".windows.cell_feature.tsv.gz"),
-        win_feature = op.join(ECKER_RUN, ECKER_RUN_NAME + ".windows.feature.tsv.gz"),
-        win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
-        manifest = op.join(ECKER_DATA, "cells.tsv"),
+        binary = AMET,
+        cells = op.join(ECKER_DATA, "cells.tsv"),
+        cell_files = _ecker_all_cell_tsvs,
+        genome = op.join(REFS, "mm10_ensembl", "genome.fa"),
+        bed = op.join(ECKER_RUN, "beds", "windows.bed"),
     output:
-        html = op.join(ECKER_RUN, ECKER_RUN_NAME + ".html"),
+        cell_feature = op.join(
+            ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        feature = op.join(
+            ECKER_RUN, "windows", "all.feature.tsv.gz"),
     params:
-        out_dir = ECKER_RUN,
-        run_name = ECKER_RUN_NAME,
+        prefix = op.join(ECKER_RUN, "windows", "all"),
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+        min_cells = config["amet"]["min_cells_per_group"],
+        thresh = config["amet"]["meth_call_threshold"],
+    threads: min(workflow.cores, 8)
     log:
-        op.join(ECKER_RUN, "logs", "render.log"),
+        op.join(ECKER_RUN, "logs", "amet_windows.log"),
     shell:
-        r"""
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} \
+            --genome {input.genome} \
+            --cells {input.cells} \
+            --features {input.bed} \
+            --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} \
+            --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group {params.min_cells} \
+            --meth-call-threshold {params.thresh} \
+            --threads {threads} &> {log}
+        """
+
+
+def _ecker_combos():
+    """(sub_region, sub_type) pairs from cells.tsv after the manifest checkpoint.
+    Sanitizes both fields by replacing space with '-'."""
+    import csv
+    manifest_path = checkpoints.ecker_make_manifest.get().output.manifest
+    pairs = set()
+    with open(manifest_path) as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            sr = row.get("sub_region")
+            st = row.get("sub_type")
+            if sr and st:
+                pairs.add((str(sr).replace(" ", "-"),
+                           str(st).replace(" ", "-")))
+    return sorted(pairs)
+
+
+def list_ecker_features_outputs(wildcards):
+    combos = _ecker_combos()
+    out = []
+    for ann in _ECKER_LOCAL_ANN_NAMES:
+        for sr, st in combos:
+            out.append(op.join(ECKER_RUN, "features",
+                               f"{ann}_{sr}_{st}.cell_feature.tsv.gz"))
+            out.append(op.join(ECKER_RUN, "features",
+                               f"{ann}_{sr}_{st}.feature.tsv.gz"))
+    return out
+
+
+def _ecker_render_shell():
+    return r"""
         mkdir -p {params.out_dir}
         Rscript -e 'rmarkdown::render("{input.rmd}",
-            output_file="{params.run_name}.html",
+            output_file="{wildcards.rmd_name}.html",
             output_dir="{params.out_dir}",
+            knit_root_dir="{params.out_dir}",
             params=list(
-                feat_cell_feature="{input.feat_cell_feature}",
-                feat_feature="{input.feat_feature}",
-                feat_bed="{input.feat_bed}",
+                features_dir="{params.features_dir}",
                 win_cell_feature="{input.win_cell_feature}",
                 win_feature="{input.win_feature}",
                 win_bed="{input.win_bed}",
@@ -337,3 +450,57 @@ rule ecker_render_report:
                 out_dir="{params.out_dir}"),
             quiet=TRUE)' &> {log}
         """
+
+
+rule render_ecker_analytical_rmd:
+    """Render one of the three analytical Ecker Rmds (ecker, _windows,
+    _embeddings). Each writes RDS/CSV intermediates that fig_ecker consumes."""
+    wildcard_constraints:
+        rmd_name = "ecker|ecker_windows|ecker_embeddings",
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        features = list_ecker_features_outputs,
+        win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
+        manifest = op.join(ECKER_DATA, "cells.tsv"),
+    output:
+        html = op.join(ECKER_RUN, "{rmd_name}.html"),
+    params:
+        out_dir = ECKER_RUN,
+        features_dir = op.join(ECKER_RUN, "features"),
+    log:
+        op.join(ECKER_RUN, "logs", "render_{rmd_name}.log"),
+    shell:
+        _ecker_render_shell()
+
+
+rule render_fig_ecker_rmd:
+    """Render fig_ecker.Rmd; depends on the three analytical Rmds because
+    it loads their RDS intermediates."""
+    wildcard_constraints:
+        rmd_name = "fig_ecker",
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        analytical = expand(op.join(ECKER_RUN, "{r}.html"),
+                            r = ["ecker",
+                                 "ecker_windows",
+                                 "ecker_embeddings"]),
+        features = list_ecker_features_outputs,
+        win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
+        manifest = op.join(ECKER_DATA, "cells.tsv"),
+    output:
+        html = op.join(ECKER_RUN, "{rmd_name}.html"),
+    params:
+        out_dir = ECKER_RUN,
+        features_dir = op.join(ECKER_RUN, "features"),
+    log:
+        op.join(ECKER_RUN, "logs", "render_{rmd_name}.log"),
+    shell:
+        _ecker_render_shell()

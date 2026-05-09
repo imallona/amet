@@ -1,10 +1,16 @@
 ## Plotting theme: square panels, no grid lines, black borders.
 ## Used across all evaluation scripts and Rmd reports.
+## theme_ng matches yamet's rules/src/ggtheme.R verbatim (45-degree x-axis text);
+## ng_fig_size and save_ng are also ported for the Rmd verbatim port.
 
 suppressPackageStartupMessages({
     library(ggplot2)
+    library(viridis)
     library(patchwork)
 })
+
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
+                "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
 theme_ng <- function(base_size = 8, base_family = "Helvetica") {
     theme_classic(base_size = base_size, base_family = base_family) %+replace%
@@ -15,6 +21,8 @@ theme_ng <- function(base_size = 8, base_family = "Helvetica") {
             axis.ticks = element_line(linewidth = 0.3, colour = "black"),
             axis.ticks.length = unit(1.5, "mm"),
             axis.text = element_text(size = base_size, colour = "black"),
+            axis.text.x = element_text(size = base_size, colour = "black",
+                                       angle = 45, hjust = 1, vjust = 1),
             axis.title = element_text(size = base_size, colour = "black"),
             strip.background = element_blank(),
             strip.text = element_text(size = base_size, colour = "black"),
@@ -29,6 +37,41 @@ theme_ng <- function(base_size = 8, base_family = "Helvetica") {
             aspect.ratio = 1,
             complete = TRUE
         )
+}
+
+## Compute figure dimensions so each panel is ~panel_mm wide (and tall, given
+## aspect.ratio = 1).
+ng_fig_size <- function(ncol = 1, nrow = 1,
+                        panel_mm  = 40,
+                        legend_mm = 25,
+                        strip_mm  = 6) {
+    w <- (ncol * panel_mm + legend_mm + strip_mm) / 25.4
+    h <- (nrow * panel_mm + strip_mm  * nrow)     / 25.4
+    list(w = round(w, 1), h = round(h, 1))
+}
+
+guide_x_nolap <- function() guide_axis(check.overlap = TRUE)
+
+theme_ng_discrete <- function(base_size = 8, base_family = "Helvetica") {
+    list(
+        theme_ng(base_size = base_size, base_family = base_family),
+        scale_color_manual(values = cbbPalette)
+    )
+}
+
+theme_ng_continuous <- function(base_size = 8, base_family = "Helvetica") {
+    list(
+        theme_ng(base_size = base_size, base_family = base_family),
+        scale_fill_viridis_c()
+    )
+}
+
+save_ng <- function(plot, file, width_mm = 85, height_mm = 60) {
+    ggsave(paste0(file, ".png"), plot,
+           width = width_mm, height = height_mm, units = "mm", dpi = 600)
+    ggsave(paste0(file, ".svg"), plot,
+           width = width_mm, height = height_mm, units = "mm")
+    invisible(plot)
 }
 
 save_eval <- function(plot, data, prefix, width_mm = 60, height_mm = 60) {

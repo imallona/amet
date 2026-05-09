@@ -1,0 +1,120 @@
+---
+title: "Ecker: single-cell genomic windows summaries"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+    number_sections: true
+    df_print: default
+    theme: lumen
+params:
+  features_dir: ""
+  win_cell_feature: ""
+  win_feature: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(data.table)
+  library(readr)
+  library(dplyr)
+  library(ggplot2)
+  library(BiocParallel)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+
+param <- SerialParam()
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = TRUE,
+  cache = FALSE,
+  fig.path = "ecker_windows_plots/"
+)
+```
+
+```{r load_meta}
+man <- fread(params$manifest)
+cat("Cells in manifest:", nrow(man), "\n")
+cat("Cell classes:", length(unique(man$cell_class)), "\n")
+cat("Major types:", length(unique(man$major_type)), "\n")
+```
+
+```{r load_amet_windows}
+## amet's window-scope output replaces yamet's per-window SCE. Two long
+## tables: per-cell-per-window i_total + mean_meth, and per-window-per-group
+## jsd (loaded but not used in this Rmd, kept for symmetry with yamet).
+win_cf <- fread(params$win_cell_feature)
+keep_cols <- intersect(c("cell_id", "cell_class", "major_type", "sub_region", "sub_type"),
+                       colnames(man))
+win_cf <- merge(win_cf, man[, ..keep_cols],
+                by = "cell_id", all.x = TRUE)
+
+cat("Cell-window rows:", nrow(win_cf), "\n")
+cat("Unique windows:", uniqueN(win_cf$feature_id), "\n")
+cat("Unique cells:", uniqueN(win_cf$cell_id), "\n")
+cat("Cell classes in data:\n")
+print(table(win_cf$cell_class, useNA = "ifany"))
+cat("Major types in data:\n")
+print(table(win_cf$major_type, useNA = "ifany"))
+```
+
+```{r filter_na}
+## yamet's NA filter at the SCE level dropped windows missing in > 30% of
+## cells. The same threshold is applied here on the long table.
+n_cells <- uniqueN(win_cf$cell_id)
+win_cov <- win_cf[, .(cov_frac = .N / n_cells), by = feature_id]
+keep_win <- win_cov[cov_frac >= 0.7, feature_id]
+win_cf <- win_cf[feature_id %in% keep_win]
+cat("Windows after NA filter (>= 70% cells covered):", uniqueN(win_cf$feature_id), "\n")
+```
+
+<!-- Section dropped: amet's i_total is methylation-stable by construction, no per-window meth-correction step is needed (yamet/ecker_windows.Rmd lines 105-109, the add_meth_correction call). -->
+
+# QC
+
+```{r cell_qc_df}
+cell_df <- win_cf[, .(
+  mean_i_total = mean(i_total,  na.rm = TRUE),
+  mean_meth    = mean(mean_meth, na.rm = TRUE)
+), by = .(cell_id, cell_class, major_type)]
+
+write.csv(cell_df, "ecker_per_cell_summary.csv", row.names = FALSE)
+```
+
+<!-- Section dropped: amet has no raw S, so the sampen_by_class chunk (yamet/ecker_windows.Rmd lines 123-130) is gone. -->
+
+```{r itotal_by_class, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
+ggplot(cell_df, aes(x = cell_class, y = mean_i_total, fill = cell_class)) +
+  geom_violin(trim = FALSE, scale = "width") +
+  geom_boxplot(width = 0.1, outlier.size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = ecker_cell_class_pal) +
+  theme_ng(base_size = 8) +
+  theme(legend.position = "none") +
+  labs(y = expression("mean " * i[total]),
+       title = expression("Per-cell mean " * i[total] * " by cell class"))
+```
+
+```{r meth_vs_itotal, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
+ggplot(cell_df, aes(x = mean_meth, y = mean_i_total, color = cell_class)) +
+  geom_point(size = 0.4, alpha = 0.5) +
+  scale_color_manual(values = ecker_cell_class_pal) +
+  guides(color = guide_legend(override.aes = list(size = 2, alpha = 1), ncol = 2)) +
+  theme_ng(base_size = 8) +
+  labs(x = "mean methylation", y = expression("mean " * i[total]),
+       title = expression("Global " * i[total] * " vs methylation per cell"))
+```
+
+```{r session}
+sessionInfo()
+```

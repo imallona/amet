@@ -21,6 +21,9 @@ have  <- data.table(cell_id = ids, path = normalizePath(files))
 
 merged <- merge(have, meta, by.x = "cell_id", by.y = "id_met")
 
+extra_cols <- intersect(c("lineage10x", "lineage10x_2", "plate"),
+                        colnames(merged))
+
 out <- merged[, .(
     cell_id,
     group  = get(opt$group_col),
@@ -29,6 +32,9 @@ out <- merged[, .(
     stage,
     embryo
 )]
+for (col in extra_cols)
+    out[[col]] <- merged[[col]]
+
 out <- out[!is.na(group)]
 
 fwrite(out, opt$out, sep = "\t")

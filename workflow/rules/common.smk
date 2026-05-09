@@ -21,6 +21,15 @@ CHR19 = {
     "hg19_ucsc": "https://hgdownload.cse.ucsc.edu/goldenpath/hg19/chromosomes/chr19.fa.gz",
 }
 
+## Whole-genome FASTA sources. Used when the prototype chr19 restriction is
+## lifted, so amet derives a genome-wide CpG reference. About 800 MB
+## compressed each.
+WHOLE_GENOME_FASTA = {
+    "mm10_ucsc":    "https://hgdownload.cse.ucsc.edu/goldenpath/mm10/bigZips/mm10.fa.gz",
+    "mm10_ensembl": "https://ftp.ensembl.org/pub/release-102/fasta/mus_musculus/dna/Mus_musculus.GRCm38.dna.primary_assembly.fa.gz",
+    "hg19_ucsc":    "https://hgdownload.cse.ucsc.edu/goldenpath/hg19/bigZips/hg19.fa.gz",
+}
+
 
 rule build_amet:
     """Build the amet release binary. cargo handles incremental compilation."""
@@ -55,4 +64,42 @@ rule fetch_chr19_fasta:
         echo "[fetch_chr19_fasta] source={wildcards.source} url={params.url}" > {log}
         curl -sSL {params.url} 2>> {log} | gunzip -c > {output.fa}
         echo "[fetch_chr19_fasta] wrote $(wc -l < {output.fa}) lines, $(wc -c < {output.fa}) bytes to {output.fa}" >> {log}
+        """
+
+
+rule fetch_whole_genome_fasta:
+    """Pull a whole-genome FASTA. Used when the chr19 restriction is lifted.
+    Heavy: ~800 MB compressed, ~2.5 GB uncompressed. amet derives the CpG
+    reference from this on first use (cached as <fasta>.cpg)."""
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    output:
+        fa = op.join(REFS, "{source}", "genome.fa"),
+    params:
+        url = lambda w: WHOLE_GENOME_FASTA[w.source],
+    log:
+        op.join(REFS, "{source}", "logs", "fetch_genome.log"),
+    shell:
+        """
+        mkdir -p $(dirname {output.fa})
+        echo "[fetch_whole_genome] source={wildcards.source} url={params.url}" > {log}
+        curl -sSL {params.url} 2>> {log} | gunzip -c > {output.fa}
+        echo "[fetch_whole_genome] wrote $(wc -c < {output.fa}) bytes to {output.fa}" >> {log}
+        """
+
+
+rule whole_genome_sizes:
+    """Chrom-sizes from a whole-genome FASTA, written as <chr>\\t<len>."""
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    input:
+        fa = op.join(REFS, "{source}", "genome.fa"),
+    output:
+        sizes = op.join(REFS, "{source}", "genome.sizes"),
+    shell:
+        r"""
+        awk 'BEGIN{{n=""; len=0}}
+             /^>/{{if(n) print n"\t"len; n=substr($1,2); len=0; next}}
+             {{len+=length($0)}}
+             END{{if(n) print n"\t"len}}' {input.fa} > {output.sizes}
         """

@@ -1,0 +1,126 @@
+---
+title: "CRC differential entropy figure"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  bookdown::html_document2:
+    code_folding: hide
+    number_sections: no
+params:
+  features_dir: ""
+  windows_dir: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+  de: ""
+  corrected_sce: ""
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(patchwork)
+  library(dplyr)
+  library(tidyr)
+  library(SingleCellExperiment)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+out_dir <- params$out_dir
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+```
+
+```{r load}
+de     <- readRDS(params$de)
+embeds <- readRDS("crc_embeddings_debug.rds")
+sce    <- readRDS(params$corrected_sce)
+```
+
+```{r de-summaries}
+de_nc <- de[c("pt_vs_nc", "ln_vs_nc", "ml_vs_nc", "mp_vs_nc")]
+
+summarize_contrast <- function(df, alpha = 0.05) {
+  sig <- df[df$adj_p < alpha, ]
+  data.frame(
+    upregulated   = sum(sig$moderated_t >= 0, na.rm = TRUE),
+    downregulated = sum(sig$moderated_t < 0,  na.rm = TRUE)
+  )
+}
+
+summary_table <- bind_rows(lapply(names(de_nc), function(nm) {
+  cbind(contrast = nm, summarize_contrast(de_nc[[nm]]$coefs_df))
+}))
+write.csv(summary_table, "crc_diffentropy_counts.csv", row.names = FALSE)
+```
+
+```{r panel-a-removed, eval=FALSE, include=FALSE}
+# Panel A (DE counts barplot) was removed because it duplicates fig_crc.Rmd
+# panel F. The underlying CSVs crc_de_counts.csv (single_page) and
+# crc_diffentropy_counts.csv (this Rmd) are byte-identical for the columns
+# read by both panels.
+```
+
+```{r prop-df}
+## amet's window BED has only (chrom, start, end, feature_id) columns; no
+## per-window genomic-feature annotation matrix is exported. yamet's panel B
+## requires that matrix; render an empty placeholder.
+prop_df <- data.frame(annotation = character(), contrast = character(),
+                      direction = character(), proportion = numeric())
+write.csv(prop_df, "crc_diffentropy_annotation_overlap.csv", row.names = FALSE)
+```
+
+```{r panel-b}
+prop_legend <- "proportion of windows\noverlapping annotation"
+pb <- ggplot() +
+  annotate("text", x = 0.5, y = 0.5,
+           label = "annotation overlap not available\n(amet windows BED has no per-window annotations)",
+           size = 2.8) +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+  theme_void() +
+  theme(plot.title = element_text(size = 8))
+```
+
+```{r panel-c}
+## Panel C in yamet groups windows by binarized rowData annotations on the SCE.
+## amet's window BED has none of those columns; render a placeholder.
+pc <- ggplot() +
+  annotate("text", x = 0.5, y = 0.5,
+           label = "per-cell adjS by annotation overlap not available\n(amet windows BED has no per-window annotations)",
+           size = 2.8) +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+  theme_void() +
+  theme(plot.title = element_text(size = 8))
+```
+
+```{r single-panel-overlap, fig.width = 6.1, fig.height = 2.6}
+pb_solo <- pb
+print(pb_solo)
+
+ggsave(
+  file.path(out_dir, "fig_crc_diffentropy_overlap_props.pdf"),
+  plot   = pb_solo,
+  width  = 6.1, height = 2.6, units = "in",
+  device = cairo_pdf
+)
+```
+
+```{r single-panel-cell-adjS, fig.width = 6.1, fig.height = 2.8}
+pc_solo <- pc
+print(pc_solo)
+
+ggsave(
+  file.path(out_dir, "fig_crc_diffentropy_cell_adjS.pdf"),
+  plot   = pc_solo,
+  width  = 6.1, height = 2.8, units = "in",
+  device = cairo_pdf
+)
+```

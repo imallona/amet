@@ -44,12 +44,28 @@ EVAL_OUTPUTS = [
 SIM_REPORT_HTML = op.join(SIM, "simulations_report.html")
 
 
-ARG_REPORT_HTML = op.join(RESULTS, config["argelaguet"]["run_name"],
-                          config["argelaguet"]["run_name"] + ".html")
-CRC_REPORT_HTML = op.join(RESULTS, config["crc"]["run_name"],
-                          config["crc"]["run_name"] + ".html")
-ECKER_REPORT_HTML = op.join(RESULTS, config["ecker"]["run_name"],
-                            config["ecker"]["run_name"] + ".html")
+ARG_RUN_DIR = op.join(RESULTS, config["argelaguet"]["run_name"])
+ARG_RMDS = ["argelaguet",
+            "argelaguet_embeddings",
+            "argelaguet_windows",
+            "fig_argelaguet"]
+ARG_HTMLS = [op.join(ARG_RUN_DIR, f"{r}.html") for r in ARG_RMDS]
+
+CRC_RUN_DIR = op.join(RESULTS, config["crc"]["run_name"])
+CRC_RMDS = ["crc",
+            "crc_windows",
+            "crc_windows_sce",
+            "crc_embeddings",
+            "fig_crc",
+            "fig_crc_diffentropy"]
+CRC_HTMLS = [op.join(CRC_RUN_DIR, f"{r}.html") for r in CRC_RMDS]
+
+ECKER_RUN_DIR = op.join(RESULTS, config["ecker"]["run_name"])
+ECKER_RMDS = ["ecker",
+              "ecker_windows",
+              "ecker_embeddings",
+              "fig_ecker"]
+ECKER_HTMLS = [op.join(ECKER_RUN_DIR, f"{r}.html") for r in ECKER_RMDS]
 
 
 rule all:
@@ -61,15 +77,15 @@ rule simulations:
 
 
 rule argelaguet:
-    input: ARG_REPORT_HTML
+    input: ARG_HTMLS
 
 
 rule crc:
-    input: CRC_REPORT_HTML
+    input: CRC_HTMLS
 
 
 rule ecker:
-    input: ECKER_REPORT_HTML
+    input: ECKER_HTMLS
 
 
 rule render_simulations_report:

@@ -1,716 +1,683 @@
 ---
-title: "amet on Bian 2018 CRC scTrioSeq2"
+title: "CRC by feature (no windows)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
 author: "Izaskun Mallona"
-date: "`r format(Sys.time(), '%d %B %Y')`"
 output:
   html_document:
     toc: true
     toc_float: true
     code_folding: hide
+    code_download: true
     number_sections: true
     df_print: default
+    theme: lumen
 params:
-  feat_cell_feature: ""
-  feat_feature: ""
-  feat_bed: ""
-  win_cell_feature: ""
-  win_feature: ""
+  features_dir: ""
+  windows_dir: ""
   win_bed: ""
   manifest: ""
   out_dir: ""
 ---
 
-```{r setup, include = FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
-                      fig.width = 5, fig.height = 4)
-
+```{r, setup}
 suppressPackageStartupMessages({
-    library(data.table)
-    library(ggplot2)
-    library(ggridges)
-    library(ggrepel)
-    library(viridis)
-    library(patchwork)
-    library(dplyr)
-    library(tidyr)
-    library(uwot)
+  library(data.table)
+  library(readr)
+  library(ggplot2)
+  library(knitr)
+  library(ComplexHeatmap)
+  library(viridis)
+  library(BiocParallel)
+  library(dplyr)
+  library(tidyr)
+  library(ggrepel)
 })
 
 repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
 source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
-
-panels_dir <- file.path(params$out_dir, "panels")
-feat_dir <- file.path(panels_dir, "feature")
-win_dir <- file.path(panels_dir, "window")
-dir.create(feat_dir, showWarnings = FALSE, recursive = TRUE)
-dir.create(win_dir, showWarnings = FALSE, recursive = TRUE)
-
-location_levels <- c("NC", "PT", "LN", "ML", "MP", "MO")
-loc_pal <- c(NC = "#4DAF4A", PT = "#E41A1C", LN = "#377EB8",
-             ML = "#984EA3", MP = "#FF7F00", MO = "#A65628")
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+source(file.path(repo_root, "workflow", "scripts", "driver_utils.R"))
+param <- SerialParam()
 ```
 
-# Inputs and design
-
-CRC prototype run: chr19, two patients (CRC01, CRC02), three biopsy locations (NC = normal colon, PT = primary tumour, LN = lymph node metastasis). Per-cell raw files are scTrioSeq2 singleC tables read by amet's bismark parser.
-
-The report is split into two analyses with **disjoint inputs and disjoint feature definitions**:
-
-- **Feature-based**: amet outputs over CpG islands on chr19. One feature = one CGI. This section answers questions about regulatory regions: which annotation classes are most variable, which contrasts (PT vs NC, LN vs NC) carry the strongest signal, and how regularity (`i_total`) and across-cell heterogeneity (`jsd`) co-vary.
-- **Window-based**: amet outputs over fixed-size genome tiles on chr19. One feature = one window. Used for cell-level summaries, embeddings, and unbiased landscape views.
-
-Score mapping: amet `i_total` (within-cell mutual information across CpG lags) replaces yamet's adjS; amet `jsd` (across-cell heterogeneity in lag-1 2-mer histograms) replaces yamet's adjH.
-
-```{r load}
-man <- fread(params$manifest)
-feat_cf <- fread(params$feat_cell_feature)
-feat_fe <- fread(params$feat_feature)
-win_cf <- fread(params$win_cell_feature)
-win_fe <- fread(params$win_feature)
-feat_bed <- fread(params$feat_bed, header = FALSE,
-                  col.names = c("chrom", "start", "end", "feature_id"))
-win_bed <- fread(params$win_bed, header = FALSE,
-                 col.names = c("chrom", "start", "end", "feature_id"))
-
-man[, location := factor(location, levels = location_levels)]
-man[, group := location]
-
-feat_cf <- merge(feat_cf, man[, .(cell_id, patient, location)],
-                 by = "cell_id", all.x = TRUE)
-feat_fe[, location := factor(group, levels = location_levels)]
-
-win_cf <- merge(win_cf, man[, .(cell_id, patient, location)],
-                by = "cell_id", all.x = TRUE)
-win_fe[, location := factor(group, levels = location_levels)]
-```
-
-# Sample sizes and coverage
-
-```{r sizes, fig.width = 6, fig.height = 3}
-sizes_dt <- man[, .(cells = .N), by = .(patient, location)][order(patient, location)]
-print(sizes_dt)
-
-p_n <- ggplot(sizes_dt, aes(x = location, y = cells, fill = patient)) +
-    geom_col(position = position_dodge(width = 0.85), width = 0.8) +
-    labs(x = NULL, y = "cells") +
-    theme_ng()
-save_eval(p_n, sizes_dt, file.path(panels_dir, "ncells_per_group"),
-          width_mm = 90, height_mm = 60)
-p_n
-```
-
-```{r coverage_diag, fig.width = 7, fig.height = 3.5}
-cov_feat <- feat_cf[, .(n_features = .N,
-                        median_n_cpgs = median(n_cpgs, na.rm = TRUE)),
-                    by = .(cell_id, location)]
-cov_win <- win_cf[, .(n_windows = .N,
-                      median_n_cpgs = median(n_cpgs, na.rm = TRUE)),
-                  by = .(cell_id, location)]
-cov_long <- rbind(
-    cov_feat[, .(cell_id, location, n = n_features, scope = "feature (CGI)")],
-    cov_win[,  .(cell_id, location, n = n_windows,  scope = "window")]
+```{r}
+opts_chunk$set(
+  fig.width = 5,
+  fig.height = 5,
+  cache = FALSE,
+  include = TRUE,
+  fig.path = "crc_plots/",
+  dev = c("png", "svg"),
+  dpi = 500,
+  cache.lazy = FALSE,
+  warning = TRUE,
+  message = TRUE
 )
-p_cov <- ggplot(cov_long, aes(x = location, y = n, fill = location)) +
-    geom_violin(alpha = 0.6, scale = "width") +
-    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white") +
-    scale_fill_manual(values = loc_pal) +
-    facet_wrap(~ scope, scales = "free_y") +
-    labs(x = NULL, y = "covered features per cell") +
-    theme_ng() +
-    theme(legend.position = "none")
-save_eval(p_cov, cov_long, file.path(panels_dir, "coverage_per_cell"),
-          width_mm = 130, height_mm = 70)
-p_cov
 ```
 
-# Feature-based analysis: CpG islands on chr19
+These are amet feature TSVs (per (subcat, cat, patient, location) combo). Per-cell `i_total` from cell_feature.tsv.gz replaces yamet's per-cell sampen_norm; per-feature `jsd` from feature.tsv.gz replaces yamet's per-group adjH.
 
-Each feature = one CGI. Score: `i_total` (within-cell, per cell × CGI), `jsd` (across-cell, per CGI × group). Coverage: `n_cpgs` per cell × CGI; `mean_meth` per cell × CGI.
+```{r, import_short_reports}
+## Filename parsers (mirror yamet/crc.Rmd):
+##   feat: <subcat>_<cat>_<patient>_<location>.{cell_feature,feature}.tsv.gz
+get_subcat   <- function(fn) sub("^([^_]+)_[^_]+_[^_]+_[^_]+\\..*$", "\\1", fn)
+get_cat      <- function(fn) sub("^[^_]+_([^_]+)_[^_]+_[^_]+\\..*$", "\\1", fn)
+get_patient  <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$",          "\\1", fn)
+get_location <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",            "\\1", fn)
 
-```{r feat_filter}
-fcf <- feat_cf[!is.na(i_total)]
-ffe <- feat_fe[!is.na(jsd)]
-```
-
-## Within-cell regularity (i_total)
-
-### Per-location distribution
-
-```{r feat_itotal_box, fig.width = 5, fig.height = 4}
-p_itotal_box <- ggplot(fcf, aes(x = location, y = i_total, fill = location)) +
-    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
-    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
-                 linewidth = 0.3) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = NULL, y = expression(i[total])) +
-    theme_ng() + theme(legend.position = "none")
-save_eval(p_itotal_box,
-          fcf[, .(cell_id, location, patient, feature_id, i_total)],
-          file.path(feat_dir, "itotal_by_location"))
-p_itotal_box
-```
-
-### Stratified by patient
-
-```{r feat_itotal_pat, fig.width = 7, fig.height = 4}
-p_itotal_pat <- ggplot(fcf, aes(x = location, y = i_total, fill = location)) +
-    geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.7) +
-    scale_fill_manual(values = loc_pal) +
-    facet_wrap(~ patient) +
-    labs(x = NULL, y = expression(i[total])) +
-    theme_ng() + theme(legend.position = "none")
-save_eval(p_itotal_pat,
-          fcf[, .(cell_id, location, patient, i_total)],
-          file.path(feat_dir, "itotal_by_location_patient"),
-          width_mm = 130, height_mm = 70)
-p_itotal_pat
-```
-
-### Density ridges per location
-
-```{r feat_itotal_ridge, fig.width = 5, fig.height = 4}
-p_ridge <- ggplot(fcf, aes(x = i_total, y = location, fill = location)) +
-    geom_density_ridges(alpha = 0.7, scale = 1.2, linewidth = 0.3) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = expression(i[total]), y = NULL) +
-    theme_ng() + theme(legend.position = "none", aspect.ratio = NULL)
-save_eval(p_ridge, fcf[, .(location, i_total)],
-          file.path(feat_dir, "itotal_ridge_location"))
-p_ridge
-```
-
-### Mean per cell, per location
-
-```{r feat_itotal_per_cell, fig.width = 5, fig.height = 4}
-cell_summary_feat <- fcf[, .(mean_i_total = mean(i_total, na.rm = TRUE),
-                             median_i_total = median(i_total, na.rm = TRUE),
-                             mean_meth = mean(mean_meth, na.rm = TRUE),
-                             n_features = .N),
-                         by = .(cell_id, patient, location)]
-
-p_cell_it <- ggplot(cell_summary_feat,
-                    aes(x = location, y = mean_i_total, fill = location)) +
-    geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.75) +
-    geom_jitter(width = 0.18, size = 0.6, alpha = 0.7) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = NULL, y = expression("mean " * i[total] * " per cell")) +
-    theme_ng() + theme(legend.position = "none")
-save_eval(p_cell_it, cell_summary_feat,
-          file.path(feat_dir, "itotal_per_cell"))
-p_cell_it
-```
-
-## Methylation diagnostics
-
-```{r feat_meth_box, fig.width = 5, fig.height = 4}
-p_meth_box <- ggplot(cell_summary_feat,
-                     aes(x = location, y = mean_meth, fill = location)) +
-    geom_boxplot(outlier.size = 0.3, linewidth = 0.3, alpha = 0.75) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = NULL, y = "mean methylation per cell (CGIs)") +
-    theme_ng() + theme(legend.position = "none")
-save_eval(p_meth_box, cell_summary_feat,
-          file.path(feat_dir, "meanmeth_per_cell"))
-p_meth_box
-```
-
-## Decoupling: i_total vs mean methylation
-
-```{r feat_decouple_pt, fig.width = 5, fig.height = 4}
-p_decouple_pt <- ggplot(fcf,
-                        aes(x = mean_meth, y = i_total, colour = location)) +
-    geom_point(size = 0.5, alpha = 0.5) +
-    geom_smooth(method = "loess", se = FALSE, linewidth = 0.4) +
-    scale_colour_manual(values = loc_pal) +
-    labs(x = "mean methylation (per cell, per CGI)",
-         y = expression(i[total]),
-         colour = "location") +
-    theme_ng()
-save_eval(p_decouple_pt,
-          fcf[, .(cell_id, location, mean_meth, i_total)],
-          file.path(feat_dir, "itotal_vs_meth_scatter"))
-p_decouple_pt
-```
-
-```{r feat_decouple_facet, fig.width = 7, fig.height = 4}
-p_decouple_pat <- p_decouple_pt + facet_wrap(~ patient)
-save_eval(p_decouple_pat,
-          fcf[, .(cell_id, location, patient, mean_meth, i_total)],
-          file.path(feat_dir, "itotal_vs_meth_by_patient"),
-          width_mm = 140, height_mm = 70)
-p_decouple_pat
-```
-
-```{r feat_decouple_per_cell, fig.width = 5, fig.height = 4}
-p_per_cell_dec <- ggplot(cell_summary_feat,
-                         aes(x = mean_meth, y = mean_i_total, colour = location,
-                             shape = patient)) +
-    geom_point(size = 1.6, alpha = 0.9) +
-    scale_colour_manual(values = loc_pal) +
-    labs(x = "mean methylation per cell",
-         y = expression("mean " * i[total] * " per cell")) +
-    theme_ng()
-save_eval(p_per_cell_dec, cell_summary_feat,
-          file.path(feat_dir, "itotal_vs_meth_per_cell"))
-p_per_cell_dec
-```
-
-## Across-cell heterogeneity (jsd)
-
-### Per-location distribution
-
-```{r feat_jsd_box, fig.width = 5, fig.height = 4}
-if (nrow(ffe) > 0) {
-    p_jsd_box <- ggplot(ffe, aes(x = location, y = jsd, fill = location)) +
-        geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
-        geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
-                     linewidth = 0.3) +
-        scale_fill_manual(values = loc_pal) +
-        labs(x = NULL, y = "jsd") +
-        theme_ng() + theme(legend.position = "none")
-    save_eval(p_jsd_box, ffe[, .(feature_id, location, n_cells, jsd)],
-              file.path(feat_dir, "jsd_by_location"))
-    p_jsd_box
-} else {
-    cat("All jsd values NA at the configured min-cells-per-group threshold.\n")
+read_combo_feat <- function(fp, value_kind) {
+  fn <- basename(fp)
+  base <- sub(paste0("\\.", value_kind, "\\.tsv\\.gz$"), "", fn)
+  bx <- paste0(base, ".x")
+  sc <- get_subcat(bx); ct <- get_cat(bx)
+  pt <- get_patient(bx); lc <- get_location(bx)
+  dt <- fread(fp)
+  dt[, subcat   := sc]
+  dt[, cat      := ct]
+  dt[, patient  := pt]
+  dt[, location := lc]
+  dt
 }
-```
 
-### Density ridges
+cf_files <- list.files(params$features_dir,
+                       pattern = "\\.cell_feature\\.tsv\\.gz$",
+                       full.names = TRUE)
+fe_files <- list.files(params$features_dir,
+                       pattern = "\\.feature\\.tsv\\.gz$",
+                       full.names = TRUE)
+fe_files <- fe_files[!grepl("\\.cell_feature\\.tsv\\.gz$", fe_files)]
 
-```{r feat_jsd_ridge, fig.width = 5, fig.height = 4}
-if (exists("p_jsd_box")) {
-    p_jsd_ridge <- ggplot(ffe, aes(x = jsd, y = location, fill = location)) +
-        geom_density_ridges(alpha = 0.7, scale = 1.1, linewidth = 0.3) +
-        scale_fill_manual(values = loc_pal) +
-        labs(x = "jsd", y = NULL) +
-        theme_ng() + theme(legend.position = "none", aspect.ratio = NULL)
-    save_eval(p_jsd_ridge, ffe[, .(location, jsd)],
-              file.path(feat_dir, "jsd_ridge_location"))
-    p_jsd_ridge
-}
-```
+feat_cf <- rbindlist(lapply(cf_files, read_combo_feat, value_kind = "cell_feature"),
+                    fill = TRUE)
+feat_fe <- rbindlist(lapply(fe_files, read_combo_feat, value_kind = "feature"),
+                    fill = TRUE)
 
-## Joint structure: i_total vs jsd at the feature level
+cat("loaded", length(cf_files), "cell_feature TSVs and",
+    length(fe_files), "feature TSVs from", params$features_dir, "\n")
 
-```{r feat_joint, fig.width = 5, fig.height = 4}
-fe_joint <- fcf[, .(median_i_total = median(i_total, na.rm = TRUE)),
-                by = .(feature_id, location)]
-fe_joint <- merge(fe_joint, ffe[, .(feature_id, location, jsd, n_cells)],
-                  by = c("feature_id", "location"))
-fe_joint <- fe_joint[!is.na(jsd) & !is.na(median_i_total)]
+## yamet's `files` long table holds one row per (cell, annotation, patient,
+## location) with columns sampen + avg_meth. Rebuild from amet's per-cell
+## i_total (renamed to sampen) and mean_meth (renamed to avg_meth) so the
+## downstream chunks copy verbatim from yamet.
+files <- as.data.frame(feat_cf)
+files$annotation <- files$subcat
+files$sampen     <- files$i_total
+files$avg_meth   <- files$mean_meth
+files <- files[, c("sampen", "avg_meth", "annotation", "patient", "location")]
 
-p_joint <- ggplot(fe_joint,
-                  aes(x = jsd, y = median_i_total, colour = location)) +
-    geom_point(size = 0.7, alpha = 0.85) +
-    scale_colour_manual(values = loc_pal) +
-    labs(x = "jsd (per CGI, per location)",
-         y = expression("median " * i[total] * " (per CGI, per location)")) +
-    theme_ng()
-save_eval(p_joint, fe_joint, file.path(feat_dir, "itotal_vs_jsd_per_feature"))
-p_joint
-```
+## prettifies and sorts categorical vars
+harmonize_levels <- function(df) {
+    pretty_hmm <- c(
+        "0_Enhancer"        = "0 Enh.",
+        "1_Transcribed"     = "1 Transc. ",
+        "2_Enhancer"        = "2 Enh.",
+        "3_Quiescent"       = "3 Quies.",
+        "4_Transcribed"     = "4 Transc.",
+        "5_RegPermissive"   = "5 Reg. perm.",
+        "6_LowConfidence"   = "6 Low conf.",
+        "7_RegPermissive"   = "7 Reg. perm.",
+        "8_Quiescent"       = "8 Quies.",
+        "9_ConstitutiveHet" = "9 Cons. het.",
+        "10_Quiescent"      = "10 Quies.",
+        "11_Promoter"       = "11 Prom.",
+        "12_Promoter"       = "12 Prom.",
+        "13_ConstitutiveHet"= "13 Cons. het"
+    )
 
-## Heatmap: median i_total per (CGI, location)
+    pretty_other <- c(
+        "cpgIslandExt"      = "CpGi",
+        "H3K4me3"           = "H3K4me3",
+        "genes"             = "Genes",
+        "H3K27me3"          = "H3K27me3",
+        "H3K9me3"           = "H3K9me3",
+        "laminb1"           = "Lamin B1",
+        "pmds"              = "PMDs",
+        "lines"             = "LINEs",
+        "sines"             = "SINEs",
+        "hmds"              = "HMDs",
+        "crc01_lost_scna"   = "SCNA loss",
+        "crc01_nc_scna"     = "SCNA neutral",
+        "crc01_gain_scna"   = "SCNA gain")
 
-```{r feat_heatmap_it, fig.width = 5, fig.height = 7}
-hm <- dcast(fcf[, .(median_i_total = median(i_total, na.rm = TRUE)),
-                by = .(feature_id, location)],
-            feature_id ~ location, value.var = "median_i_total")
-hm_mat <- as.matrix(hm[, -1])
-rownames(hm_mat) <- hm$feature_id
-hm_mat <- hm_mat[rowSums(!is.na(hm_mat)) >= 2, , drop = FALSE]
-hm_mat <- hm_mat[order(rowMeans(hm_mat, na.rm = TRUE)), , drop = FALSE]
-hm_long <- as.data.table(reshape2::melt(hm_mat, varnames = c("feature_id", "location")))
-hm_long[, feature_id := factor(feature_id, levels = rownames(hm_mat))]
+    all_levels <- c(pretty_hmm, pretty_other)
 
-p_hm_it <- ggplot(hm_long, aes(x = location, y = feature_id, fill = value)) +
-    geom_tile() +
-    scale_fill_viridis(option = "magma", na.value = "grey90") +
-    labs(x = NULL, y = "CpG island", fill = expression(i[total])) +
-    theme_ng() +
-    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
-          aspect.ratio = NULL)
-save_eval(p_hm_it, hm_long, file.path(feat_dir, "heatmap_median_itotal"),
-          width_mm = 90, height_mm = 140)
-p_hm_it
-```
-
-## Heatmap: jsd per (CGI, location)
-
-```{r feat_heatmap_jsd, fig.width = 5, fig.height = 7}
-if (nrow(ffe) > 0) {
-    jsd_w <- dcast(ffe, feature_id ~ location, value.var = "jsd")
-    jsd_mat <- as.matrix(jsd_w[, -1])
-    rownames(jsd_mat) <- jsd_w$feature_id
-    jsd_mat <- jsd_mat[rowSums(!is.na(jsd_mat)) >= 1, , drop = FALSE]
-    jsd_mat <- jsd_mat[order(rowMeans(jsd_mat, na.rm = TRUE)), , drop = FALSE]
-    jsd_long <- as.data.table(reshape2::melt(jsd_mat, varnames = c("feature_id", "location")))
-    jsd_long[, feature_id := factor(feature_id, levels = rownames(jsd_mat))]
-
-    p_hm_jsd <- ggplot(jsd_long, aes(x = location, y = feature_id, fill = value)) +
-        geom_tile() +
-        scale_fill_viridis(option = "viridis", na.value = "grey90") +
-        labs(x = NULL, y = "CpG island", fill = "jsd") +
-        theme_ng() +
-        theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
-              aspect.ratio = NULL)
-    save_eval(p_hm_jsd, jsd_long, file.path(feat_dir, "heatmap_jsd"),
-              width_mm = 90, height_mm = 140)
-    p_hm_jsd
-}
-```
-
-## Disease contrasts: PT vs NC, LN vs NC
-
-```{r feat_contrasts, fig.width = 8, fig.height = 4}
-contrast_dt <- list()
-for (lvl in c("PT", "LN")) {
-    if (!all(c("NC", lvl) %in% levels(droplevels(fe_joint$location)))) next
-    a <- fe_joint[location == "NC", .(feature_id, NC = median_i_total, NC_jsd = jsd)]
-    b <- fe_joint[location == lvl,
-                  .(feature_id, target = median_i_total, target_jsd = jsd)]
-    j <- merge(a, b, by = "feature_id")
-    j[, contrast := paste0(lvl, " - NC")]
-    contrast_dt[[lvl]] <- j
-}
-contrast_dt <- rbindlist(contrast_dt, fill = TRUE)
-
-if (nrow(contrast_dt)) {
-    p_contrast_it <- ggplot(contrast_dt, aes(x = NC, y = target, colour = contrast)) +
-        geom_abline(slope = 1, intercept = 0, colour = "grey60",
-                    linetype = "dashed", linewidth = 0.3) +
-        geom_point(size = 0.6, alpha = 0.6) +
-        facet_wrap(~ contrast) +
-        labs(x = expression("median " * i[total] * " (NC)"),
-             y = expression("median " * i[total] * " (target)"),
-             colour = NULL) +
-        theme_ng() + theme(legend.position = "none")
-    save_eval(p_contrast_it, contrast_dt,
-              file.path(feat_dir, "contrast_itotal_scatter"),
-              width_mm = 150, height_mm = 70)
-    p_contrast_it
-}
-```
-
-```{r feat_contrasts_delta, fig.width = 6, fig.height = 4}
-if (nrow(contrast_dt)) {
-    contrast_dt[, delta_it := target - NC]
-    contrast_dt[, delta_jsd := target_jsd - NC_jsd]
-
-    p_delta_hist <- ggplot(contrast_dt, aes(x = delta_it, fill = contrast)) +
-        geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
-        geom_vline(xintercept = 0, linetype = "dashed",
-                   colour = "grey40", linewidth = 0.3) +
-        labs(x = expression(Delta * i[total] * " (target - NC)"), y = "CGIs") +
-        theme_ng() + theme(legend.position = "top")
-    save_eval(p_delta_hist, contrast_dt,
-              file.path(feat_dir, "contrast_itotal_delta_hist"),
-              width_mm = 110, height_mm = 70)
-    p_delta_hist
-}
-```
-
-```{r feat_contrasts_jsd, fig.width = 6, fig.height = 4}
-if (nrow(contrast_dt) && any(!is.na(contrast_dt$delta_jsd))) {
-    p_delta_jsd <- ggplot(contrast_dt[!is.na(delta_jsd)],
-                          aes(x = delta_jsd, fill = contrast)) +
-        geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
-        geom_vline(xintercept = 0, linetype = "dashed",
-                   colour = "grey40", linewidth = 0.3) +
-        labs(x = expression(Delta * "jsd (target - NC)"), y = "CGIs") +
-        theme_ng() + theme(legend.position = "top")
-    save_eval(p_delta_jsd, contrast_dt[!is.na(delta_jsd)],
-              file.path(feat_dir, "contrast_jsd_delta_hist"),
-              width_mm = 110, height_mm = 70)
-    p_delta_jsd
-}
-```
-
-## Top variable CGIs
-
-```{r feat_top_var, fig.width = 6, fig.height = 4}
-var_dt <- fcf[, .(sd_i_total = sd(i_total, na.rm = TRUE),
-                  median_i_total = median(i_total, na.rm = TRUE),
-                  n = .N),
-              by = feature_id][n >= 5]
-top_var <- head(var_dt[order(-sd_i_total)], 20)
-
-p_top_var <- ggplot(top_var,
-                    aes(x = reorder(feature_id, sd_i_total), y = sd_i_total)) +
-    geom_col(fill = "#444444") +
-    coord_flip() +
-    labs(x = NULL, y = expression("sd(" * i[total] * ") across cells")) +
-    theme_ng() + theme(axis.text.y = element_text(size = 6),
-                       aspect.ratio = NULL)
-save_eval(p_top_var, top_var, file.path(feat_dir, "top_variable_cgi"),
-          width_mm = 110, height_mm = 80)
-p_top_var
-```
-
-# Window-based analysis: chr19 genome tiles
-
-Each feature = one fixed-size window. Same scores (`i_total`, `jsd`) but coverage is dense and uniform, so this section drives cell-level summaries and embeddings rather than per-region biology.
-
-```{r win_filter}
-wcf <- win_cf[!is.na(i_total)]
-wfe <- win_fe[!is.na(jsd)]
-```
-
-## Per-cell coverage of windows
-
-```{r win_coverage, fig.width = 6, fig.height = 4}
-win_cov <- win_cf[, .(n_windows = .N), by = .(cell_id, location, patient)]
-p_win_cov <- ggplot(win_cov, aes(x = location, y = n_windows, fill = location)) +
-    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
-    geom_jitter(width = 0.15, size = 0.5, alpha = 0.6) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = NULL, y = "covered windows per cell") +
-    theme_ng() + theme(legend.position = "none")
-save_eval(p_win_cov, win_cov, file.path(win_dir, "coverage_windows_per_cell"))
-p_win_cov
-```
-
-## Mean methylation per cell
-
-```{r win_meanmeth_box, fig.width = 5, fig.height = 4}
-cell_meth <- win_cf[!is.na(mean_meth),
-                    .(mean_meth = mean(mean_meth, na.rm = TRUE),
-                      n_windows = .N),
-                    by = .(cell_id, patient, location)]
-p_wmeth <- ggplot(cell_meth, aes(x = location, y = mean_meth, fill = location)) +
-    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
-    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
-                 linewidth = 0.3) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = NULL, y = "mean methylation per cell (windows)") +
-    theme_ng() + theme(legend.position = "none")
-save_eval(p_wmeth, cell_meth, file.path(win_dir, "meanmeth_per_cell"))
-p_wmeth
-```
-
-## Mean i_total per cell
-
-```{r win_itotal_box, fig.width = 5, fig.height = 4}
-cell_it <- wcf[, .(mean_i_total = mean(i_total, na.rm = TRUE),
-                   median_i_total = median(i_total, na.rm = TRUE),
-                   n_windows = .N),
-               by = .(cell_id, patient, location)]
-p_wit <- ggplot(cell_it, aes(x = location, y = mean_i_total, fill = location)) +
-    geom_violin(alpha = 0.55, scale = "width", linewidth = 0.3) +
-    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = "white",
-                 linewidth = 0.3) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = NULL, y = expression("mean " * i[total] * " per cell")) +
-    theme_ng() + theme(legend.position = "none")
-save_eval(p_wit, cell_it, file.path(win_dir, "mean_itotal_per_cell"))
-p_wit
-```
-
-## Methylation vs i_total per cell
-
-```{r win_per_cell_corr, fig.width = 5, fig.height = 4}
-cell_full <- merge(cell_meth, cell_it[, .(cell_id, mean_i_total, median_i_total)],
-                   by = "cell_id")
-p_wcorr <- ggplot(cell_full,
-                  aes(x = mean_meth, y = mean_i_total,
-                      colour = location, shape = patient)) +
-    geom_point(size = 1.6, alpha = 0.9) +
-    scale_colour_manual(values = loc_pal) +
-    labs(x = "mean methylation per cell",
-         y = expression("mean " * i[total] * " per cell")) +
-    theme_ng()
-save_eval(p_wcorr, cell_full, file.path(win_dir, "itotal_vs_meth_per_cell"))
-p_wcorr
-```
-
-## Window-level i_total ridges per location
-
-```{r win_itotal_ridge, fig.width = 5, fig.height = 4}
-p_win_ridge <- ggplot(wcf, aes(x = i_total, y = location, fill = location)) +
-    geom_density_ridges(alpha = 0.7, scale = 1.2, linewidth = 0.3) +
-    scale_fill_manual(values = loc_pal) +
-    labs(x = expression(i[total] * " per (cell, window)"), y = NULL) +
-    theme_ng() + theme(legend.position = "none", aspect.ratio = NULL)
-save_eval(p_win_ridge, wcf[, .(location, i_total)],
-          file.path(win_dir, "itotal_ridge_location"))
-p_win_ridge
-```
-
-## Window-level jsd ridges per location
-
-```{r win_jsd_ridge, fig.width = 5, fig.height = 4}
-if (nrow(wfe)) {
-    p_win_jsd_ridge <- ggplot(wfe, aes(x = jsd, y = location, fill = location)) +
-        geom_density_ridges(alpha = 0.7, scale = 1.1, linewidth = 0.3) +
-        scale_fill_manual(values = loc_pal) +
-        labs(x = "jsd per (window, location)", y = NULL) +
-        theme_ng() + theme(legend.position = "none", aspect.ratio = NULL)
-    save_eval(p_win_jsd_ridge, wfe[, .(location, jsd)],
-              file.path(win_dir, "jsd_ridge_location"))
-    p_win_jsd_ridge
-}
-```
-
-## Cell embedding: UMAP on cell-by-window i_total
-
-```{r win_build_mat}
-mat <- dcast(wcf, cell_id ~ feature_id, value.var = "i_total",
-             fun.aggregate = mean)
-mat_cells <- mat$cell_id
-mat <- as.matrix(mat[, -1])
-rownames(mat) <- mat_cells
-mat <- mat[, colSums(!is.na(mat)) >= 0.5 * nrow(mat), drop = FALSE]
-mat[is.na(mat)] <- 0
-cat("embedding matrix:", nrow(mat), "cells x", ncol(mat), "windows\n")
-```
-
-```{r win_umap, fig.width = 9, fig.height = 4}
-umd <- NULL
-if (nrow(mat) >= 5 && ncol(mat) >= 5) {
-    set.seed(1L)
-    n_neigh <- max(2L, min(15L, nrow(mat) - 1L))
-    um <- tryCatch(uwot::umap(mat, n_neighbors = n_neigh, min_dist = 0.3,
-                              n_components = 2, verbose = FALSE),
-                   error = function(e) { cat(conditionMessage(e), "\n"); NULL })
-    if (!is.null(um)) {
-        umd <- data.table(cell_id = rownames(mat),
-                          UMAP1 = um[, 1], UMAP2 = um[, 2])
-        umd <- merge(umd, man[, .(cell_id, patient, location)], by = "cell_id")
-
-        p_um_loc <- ggplot(umd, aes(x = UMAP1, y = UMAP2, colour = location,
-                                     shape = patient)) +
-            geom_point(size = 1.8, alpha = 0.95) +
-            scale_colour_manual(values = loc_pal) +
-            labs(title = "UMAP: location") + theme_ng()
-        p_um_pat <- ggplot(umd, aes(x = UMAP1, y = UMAP2, colour = patient,
-                                     shape = location)) +
-            geom_point(size = 1.8, alpha = 0.95) +
-            labs(title = "UMAP: patient") + theme_ng()
-        save_eval(p_um_loc, umd, file.path(win_dir, "umap_location"))
-        save_eval(p_um_pat, umd, file.path(win_dir, "umap_patient"))
-        print(p_um_loc + p_um_pat)
-    } else {
-        cat("UMAP failed; skipping.\n")
+    missing <- setdiff(unique(df$annotation), names(all_levels))
+    if (length(missing) > 0) {
+        stop(missing)
     }
+
+
+  df$annotation <- factor(df$annotation,
+                          levels = names(all_levels),
+                          labels = unname(all_levels))
+
+  df$patient  <- as.factor(df$patient)
+  df$location <- factor(df$location, levels = c("NC","PT","LN","ML","MP","MO"))
+
+  df
 }
+
+files <- harmonize_levels(files)
+table(files$annotation, useNA = 'always')
+
 ```
 
-## UMAP coloured by mean methylation
+<!-- Section dropped: amet ships only methylation-stable i_total; the raw sampen scatter and per-patient/per-location plots in yamet/crc.Rmd lines 215-417 (Bulk unnormalized sampen tabset) are gone. -->
 
-```{r win_umap_meth, fig.width = 5, fig.height = 4}
-if (!is.null(umd)) {
-    umd_full <- merge(umd, cell_full[, .(cell_id, mean_meth, mean_i_total)],
-                      by = "cell_id")
-    p_um_meth <- ggplot(umd_full,
-                        aes(x = UMAP1, y = UMAP2, colour = mean_meth)) +
-        geom_point(size = 1.8, alpha = 0.95) +
-        scale_colour_viridis(option = "magma") +
-        labs(colour = "mean meth") +
-        theme_ng()
-    save_eval(p_um_meth, umd_full, file.path(win_dir, "umap_meth"))
-    p_um_meth
-}
+# adjS - methylation-adjusted sample entropy {.tabset .tabset-pills}
+
+That is, not by locus but by cell norm sampEns (i_total) (that are calculated according to some regionset anyway). amet's i_total is the single per-cell-per-feature within-cell mutual information score; the same data already loaded above are used here directly.
+
+```{r, import_short_reports_norm}
+## In yamet there is a separate read pass for the sampen_norm column. amet's
+## i_total is that score, already in `files`, so just reuse the same data
+## frame here.
 ```
 
-## UMAP coloured by mean i_total
+## Scatters by location and annotation
 
-```{r win_umap_it, fig.width = 5, fig.height = 4}
-if (!is.null(umd)) {
-    p_um_it <- ggplot(umd_full,
-                      aes(x = UMAP1, y = UMAP2, colour = mean_i_total)) +
-        geom_point(size = 1.8, alpha = 0.95) +
-        scale_colour_viridis(option = "viridis") +
-        labs(colour = expression("mean " * i[total])) +
-        theme_ng()
-    save_eval(p_um_it, umd_full, file.path(win_dir, "umap_itotal"))
-    p_um_it
-}
+```{r}
+ggplot(
+  files,
+  aes(y = sampen, x = avg_meth, color = location, shape = patient)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values = 1:nlevels(files$patient)) +
+  facet_wrap(~annotation) +
+  labs(
+    x = "avg. methylation",
+    y = expression(i[total])
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng()
 ```
 
-## Top variable windows
+## Scatters by location and annotation and patient
 
-```{r win_top_var, fig.width = 6, fig.height = 4}
-win_var <- wcf[, .(sd_i_total = sd(i_total, na.rm = TRUE),
-                   median_i_total = median(i_total, na.rm = TRUE),
-                   n = .N),
-               by = feature_id][n >= 5]
-top_win <- head(win_var[order(-sd_i_total)], 20)
-p_win_top <- ggplot(top_win,
-                    aes(x = reorder(feature_id, sd_i_total), y = sd_i_total)) +
-    geom_col(fill = "#444444") +
-    coord_flip() +
-    labs(x = NULL, y = expression("sd(" * i[total] * ") across cells")) +
-    theme_ng() +
-    theme(axis.text.y = element_text(size = 6), aspect.ratio = NULL)
-save_eval(p_win_top, top_win, file.path(win_dir, "top_variable_windows"),
-          width_mm = 110, height_mm = 80)
-p_win_top
+```{r, fig.width = 8, fig.height = 20}
+ggplot(
+  files,
+  aes(y = sampen, x = avg_meth, color = location)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  facet_grid(annotation ~ patient) +
+  labs(
+    x = "avg. methylation",
+    y = expression(i[total])
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 ```
 
-## Per-window jsd ranked
+## Scatters by location and annotation and patient (shorter)
 
-```{r win_jsd_rank, fig.width = 6, fig.height = 4}
-if (nrow(wfe)) {
-    jsd_rank <- wfe[, .(median_jsd = median(jsd, na.rm = TRUE)),
-                    by = feature_id]
-    setorder(jsd_rank, -median_jsd)
-    jsd_rank[, rank := .I]
-    p_jsd_rank <- ggplot(jsd_rank, aes(x = rank, y = median_jsd)) +
-        geom_line(linewidth = 0.4) +
-        labs(x = "rank", y = "median jsd across locations") +
-        theme_ng()
-    save_eval(p_jsd_rank, jsd_rank, file.path(win_dir, "jsd_rank"))
-    p_jsd_rank
-}
+```{r, fig.width = 8, fig.height = 6}
+ggplot(
+  subset(files, annotation %in% c("Lamin B1", "H3K27me3", "H3K9me3")),
+  aes(y = sampen, x = avg_meth, color = location)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  facet_grid(annotation ~ patient) +
+  labs(
+    x = "avg. methylation",
+    y = expression(i[total])
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 ```
 
-## Per-window i_total location heatmap (top variable)
 
-```{r win_heatmap_top, fig.width = 5, fig.height = 6}
-top_ids <- top_win$feature_id
-hm_w <- dcast(wcf[feature_id %in% top_ids,
-                  .(median_i = median(i_total, na.rm = TRUE)),
-                  by = .(feature_id, location)],
-              feature_id ~ location, value.var = "median_i")
-hm_w_mat <- as.matrix(hm_w[, -1])
-rownames(hm_w_mat) <- hm_w$feature_id
-hm_w_long <- as.data.table(reshape2::melt(hm_w_mat,
-                                          varnames = c("feature_id", "location")))
-p_win_hm <- ggplot(hm_w_long, aes(x = location, y = feature_id, fill = value)) +
-    geom_tile() +
-    scale_fill_viridis(option = "magma", na.value = "grey90") +
-    labs(x = NULL, y = "window", fill = expression(i[total])) +
-    theme_ng() +
-    theme(axis.text.y = element_text(size = 6), aspect.ratio = NULL)
-save_eval(p_win_hm, hm_w_long, file.path(win_dir, "heatmap_top_variable_windows"),
-          width_mm = 100, height_mm = 130)
-p_win_hm
+## Segmentations {.tabset .tabset-pills}
+
+### Scatters by location and annotation
+
+```{r}
+ggplot(
+    subset(files, grepl("^[0-9]{1,2}", annotation)),
+  aes(y = sampen, x = avg_meth, color = location, shape = patient)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values = 1:nlevels(files$patient)) +
+  facet_wrap(~annotation, ncol = 3, nrow = 5) +
+  labs(
+    x = "avg. methylation",
+    y = expression(i[total])
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng()
 ```
 
-# Combined paper figure
 
-```{r paper, fig.width = 11, fig.height = 8}
-panels <- list(
-    A = if (exists("p_itotal_box")) p_itotal_box + labs(title = "A. i_total / CGI") else NULL,
-    B = if (exists("p_jsd_box")) p_jsd_box + labs(title = "B. jsd / CGI") else NULL,
-    C = if (exists("p_decouple_pt")) p_decouple_pt + labs(title = "C. decoupling / CGI") else NULL,
-    D = if (exists("p_wit")) p_wit + labs(title = "D. mean i_total per cell / windows") else NULL,
-    E = if (exists("p_um_loc")) p_um_loc + labs(title = "E. UMAP / location") else NULL,
-    F = if (exists("p_um_meth")) p_um_meth + labs(title = "F. UMAP / methylation") else NULL
+## Nonsegmentations {.tabset .tabset-pills}
+
+### Scatters by location and annotation
+
+```{r}
+ggplot(
+    subset(files, !grepl("^[0-9]{1,2}", annotation)),
+  aes(y = sampen, x = avg_meth, color = location, shape = patient)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values = 1:nlevels(files$patient)) +
+  facet_wrap(~annotation, ncol = 3, nrow = 5) +
+  labs(
+    x = "avg. methylation",
+    y = expression(i[total])
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng()
+```
+
+## Others  {.tabset .tabset-pills}
+
+### i_total boxes by location and annotation - crc01
+
+```{r, fig.width = 9, fig.height = 5}
+ggplot(
+  subset(files, patient == "CRC01"),
+  aes(y = sampen, x = annotation, color = location)
+) +
+  geom_boxplot(
+    outlier.size = 0.6,
+    outlier.alpha = 0.3
+  ) +
+  labs(y = expression(i[total])) +
+  geom_jitter(
+    position = position_dodge(width = 0.75),
+    size = 0.6, alpha = 0.3
+  ) +
+  scale_color_brewer(palette = "Dark2") +
+  theme_ng() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+### meth boxes by location and annotation - crc01
+
+```{r, fig.width = 9, fig.height = 5}
+ggplot(
+  subset(files, patient == "CRC01"),
+  aes(y = avg_meth, x = annotation, color = location)
+) +
+  geom_boxplot(
+    outlier.size = 0.6,
+    outlier.alpha = 0.3
+  ) +
+  labs(y = "avg. methylation") +
+  geom_jitter(
+    position = position_dodge(width = 0.75),
+    size = 0.6, alpha = 0.3
+  ) +
+  scale_color_brewer(palette = "Dark2") +
+  theme_ng() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+### Range plots - by compartment
+
+```{r, fig.width = 8, fig.height = 8}
+ranges <- as.data.frame(files %>%
+   filter(patient == "CRC01") %>%
+   group_by(compartment = annotation, location) %>%
+   summarise(
+     sampen_mean = mean(sampen, na.rm = TRUE),
+     sampen_min  = min(sampen, na.rm = TRUE),
+     sampen_max  = max(sampen, na.rm = TRUE),
+     meth_mean   = mean(avg_meth, na.rm = TRUE),
+     meth_min    = min(avg_meth, na.rm = TRUE),
+     meth_max    = max(avg_meth, na.rm = TRUE)))
+
+ggplot(ranges, aes(color = location)) +
+  ## horizontal segment: range of methylations for that location/compartment
+  geom_segment(
+    aes(x = meth_min, xend = meth_max, y = sampen_mean, yend = sampen_mean),
+    linewidth = 0.6, alpha = 1
+  ) +
+  # vertical segment: range of i_total for that location/compartment
+  geom_segment(
+    aes(x = meth_mean, xend = meth_mean, y = sampen_min, yend = sampen_max),
+    linewidth = 0.6, alpha = 1
+  ) +
+  # center point
+  geom_point(
+    aes(x = meth_mean, y = sampen_mean),
+    shape = 3, size = 1.2
+  ) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(x = "DNA methylation", y = expression(i[total])) +
+  facet_wrap(~ compartment) +
+  theme_ng()
+
+```
+
+```{r}
+adjsampens <- files
+```
+
+## adjS within methylation bins {.tabset .tabset-pills}
+
+Boxplots of i_total stratified by 0.1-wide average methylation bins, colored by
+location. Persistent differences within bins show that i_total captures
+heterogeneity beyond average methylation level.
+
+### All annotations
+
+```{r adjS_meth_bins_all, fig.width = ng_fig_size(5, 6)$w, fig.height = ng_fig_size(5, 6)$h}
+adjsampens %>%
+  mutate(meth_bin = cut(avg_meth, breaks = seq(0, 1, 0.1), include.lowest = TRUE)) %>%
+  filter(!is.na(meth_bin), !is.na(sampen)) %>%
+  ggplot(aes(x = meth_bin, y = sampen, fill = location)) +
+  geom_boxplot(outlier.size = 0.3, outlier.alpha = 0.2) +
+  scale_fill_brewer(palette = "Set1") +
+  facet_wrap(~annotation) +
+  labs(x = "avg. methylation bin", y = expression(i[total])) +
+  theme_ng() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+### CRC01 only
+
+```{r adjS_meth_bins_crc01, fig.width = ng_fig_size(5, 6)$w, fig.height = ng_fig_size(5, 6)$h}
+adjsampens %>%
+  filter(patient == "CRC01") %>%
+  mutate(meth_bin = cut(avg_meth, breaks = seq(0, 1, 0.1), include.lowest = TRUE)) %>%
+  filter(!is.na(meth_bin), !is.na(sampen)) %>%
+  ggplot(aes(x = meth_bin, y = sampen, fill = location)) +
+  geom_boxplot(outlier.size = 0.3, outlier.alpha = 0.2) +
+  scale_fill_brewer(palette = "Set1") +
+  facet_wrap(~annotation) +
+  labs(x = "avg. methylation bin", y = expression(i[total])) +
+  theme_ng() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+<!-- Section dropped: amet has no raw Shannon entropy. yamet/crc.Rmd lines 694-804 (Unnormalized Shannon's MEDIANS DOWNSAMPLED tabset) is gone. -->
+
+# Meth-normalized Shannons (the amet way) MEDIANS {.tabset .tabset-pills}
+
+amet's per-feature `jsd` from feature.tsv.gz replaces yamet's per-group adjH from `.norm.det.out.gz`. yamet's adjshannons holds one row per (annotation, patient, location); amet's feature TSV has many rows per group, so aggregate to the same shape with `median(jsd)`.
+
+```{r, eval = TRUE}
+adjshannons <- as.data.frame(
+  as.data.table(feat_fe)[
+    , .(median_shannon  = median(jsd, na.rm = TRUE),
+        median_avg_meth = median(mean_meth_mean, na.rm = TRUE)),
+    by = .(annotation = subcat, patient, location)
+  ]
 )
-panels <- Filter(Negate(is.null), panels)
-if (length(panels) >= 2) {
-    combined <- Reduce(`+`, panels) + plot_layout(ncol = 3)
-    ggsave(file.path(panels_dir, "paper_figure.pdf"),
-           combined, width = 260, height = 170, units = "mm",
-           device = grDevices::cairo_pdf)
-    combined
-}
+
+adjshannons <- harmonize_levels(adjshannons)
 ```
+
+## Scatters by location and annotation
+
+```{r}
+ggplot(
+  adjshannons,
+  aes(y = median_shannon, x = median_avg_meth, color = location, shape = patient)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values = 1:nlevels(adjshannons$patient)) +
+  facet_wrap(~annotation) +
+  labs(
+    x = "median average methylation",
+    y = "median jsd"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng()
+```
+
+## Scatters by location and annotation and patient
+
+```{r}
+ggplot(
+  adjshannons,
+  aes(y = median_shannon, x = median_avg_meth, color = location)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  labs(
+    x = "median average methylation",
+    y = "median jsd"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+
+
+## Segmentations {.tabset .tabset-pills}
+
+### Scatters by location and annotation
+
+```{r}
+ggplot(
+    subset(adjshannons, grepl("^[0-9]{1,2}", annotation)),
+  aes(y = median_shannon, x = median_avg_meth, color = location, shape = patient)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values = 1:nlevels(adjshannons$patient)) +
+  facet_wrap(~annotation, ncol = 3, nrow = 5) +
+  labs(
+    x = "median avg. methylation",
+    y = "median jsd"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng()
+```
+
+
+## Nonsegmentations {.tabset .tabset-pills}
+
+### Scatters by location and annotation
+
+```{r}
+ggplot(
+    subset(adjshannons, !grepl("^[0-9]{1,2}", annotation)),
+  aes(y = median_shannon, x = median_avg_meth, color = location, shape = patient)
+) +
+  geom_point(size = 0.9, alpha = 0.2) +
+  scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(values = 1:nlevels(adjshannons$patient)) +
+  facet_wrap(~annotation, ncol = 3, nrow = 5) +
+  labs(
+    x = "median avg. methylation",
+    y = "median jsd"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_ng()
+```
+
+# Attempt to assemble these all
+
+amet ships only i_total (per cell) and jsd (per group), not raw S/H. So `sampens` and `shannons` (the unnormalized variants) do not exist; only `adjsampens` and `adjshannons` carry data.
+
+```{r}
+str(adjshannons)
+str(adjsampens)
+```
+
+```{r save_for_emanuel}
+saveRDS(list(adjshannons = adjshannons,
+             adjsampens = adjsampens),
+        file = "crc_entropy_summaries.rds")
+```
+
+
+```{r summary_heatmap, fig.width = 10, fig.height = 8}
+library(ComplexHeatmap)
+library(circlize)
+
+make_hm_mat <- function(df, value_col) {
+  wide <- df %>%
+    group_by(annotation, location) %>%
+    summarise(v = median(.data[[value_col]], na.rm = TRUE), .groups = "drop") %>%
+    tidyr::pivot_wider(names_from = location, values_from = v)
+  mat <- as.matrix(wide[, -1])
+  rownames(mat) <- wide$annotation
+  mat
+}
+
+hm_adjS <- make_hm_mat(adjsampens, "sampen")
+hm_adjH <- make_hm_mat(adjshannons, "median_shannon")
+
+col_adjS <- colorRamp2(
+  quantile(hm_adjS, c(0.05, 0.5, 0.95), na.rm = TRUE),
+  c("#2166AC", "white", "#B2182B"))
+col_adjH <- colorRamp2(
+  quantile(hm_adjH, c(0.05, 0.5, 0.95), na.rm = TRUE),
+  c("#4DAC26", "white", "#D01C8B"))
+
+draw(
+  Heatmap(hm_adjS, name = "i_total", col = col_adjS,
+          cluster_columns = FALSE,
+          row_names_gp = gpar(fontsize = 7),
+          column_names_gp = gpar(fontsize = 7)) +
+  Heatmap(hm_adjH, name = "jsd", col = col_adjH,
+          cluster_rows = FALSE, cluster_columns = FALSE,
+          show_row_names = FALSE,
+          column_names_gp = gpar(fontsize = 7)),
+  column_title = "Median i_total and jsd per annotation x location"
+)
+```
+
+
+
+```{r, fig.width = 9, fig.height = 12}
+
+library(dplyr)
+
+adj_df <- adjsampens %>%
+  left_join(adjshannons,
+            by = c("annotation", "patient", "location"),
+            suffix = c("_sampen", "_shannon"))
+
+head(adj_df)
+ggplot(
+    adj_df,
+    aes(x = median_shannon, y = sampen,
+        color = location, shape = patient)
+) +
+    scale_shape_manual(values = 1:nlevels(adj_df$patient)) +
+    geom_point(size = 0.8) +
+    facet_wrap(~annotation, ncol = 4) +
+    labs(
+        x = "median jsd",
+        y = expression(i[total])
+    ) +
+  theme_ng()
+
+```
+
+<!-- Section dropped: amet has no raw Shannon entropy / unnormalized sampen, so the second scatter (sampens vs shannons) in yamet/crc.Rmd lines 1019-1039 is gone. -->
+
+```{r}
+variation <- adj_df %>%
+    group_by(annotation) %>%
+    summarise(
+        shannon_range = max(median_shannon, na.rm = TRUE) -
+            min(median_shannon, na.rm = TRUE),
+        sampen_range  = max(sampen, na.rm = TRUE) -
+            min(sampen, na.rm = TRUE),
+        shannon_sd = sd(median_shannon, na.rm = TRUE),
+        sampen_sd  = sd(sampen, na.rm = TRUE)
+    )
+
+head(variation)
+
+ggplot(variation, aes(x = shannon_range, y = sampen_range, label = annotation)) +
+    geom_point() +
+    ggrepel::geom_text_repel() +
+    labs(
+        x = "jsd range aggregating all biopsy sites",
+        y = expression(i[total] * " range aggregating all biopsy sites"),
+        ) +
+  theme_ng()
+
+
+variation_loc <- adj_df %>%
+    group_by(annotation, location) %>%
+    summarise(
+        shannon_median = median(median_shannon, na.rm = TRUE),
+        sampen_median  = median(sampen, na.rm = TRUE),
+        shannon_sd = sd(median_shannon, na.rm = TRUE),
+        sampen_sd  = sd(sampen, na.rm = TRUE),
+        shannon_range = max(median_shannon, na.rm = TRUE) -
+            min(median_shannon, na.rm = TRUE),
+        sampen_range  = max(sampen, na.rm = TRUE) -
+            min(sampen, na.rm = TRUE)
+    )
+
+ggplot(variation_loc,
+       aes(x = shannon_median, y = sampen_median,
+           color = location)) +
+    geom_point() +
+    facet_wrap(~annotation) +
+    theme_ng() +
+    labs(
+         x = "median jsd across biopsy sites",
+         y = expression("median " * i[total] * " across biopsy sites"))
+
+ggplot(variation_loc,
+       aes(x = shannon_sd, y = sampen_sd,
+           color = location)) +
+    geom_point() +
+    facet_wrap(~annotation) +
+    theme_ng() +
+    labs(
+         x = "sd jsd across biopsy sites",
+         y = expression("sd " * i[total] * " across biopsy sites"))
+
+
+ggplot(variation_loc,
+       aes(x = shannon_range, y = sampen_range,
+           color = location)) +
+    geom_point() +
+    facet_wrap(~annotation) +
+    theme_ng() +
+    labs(
+         x = "jsd range across biopsy sites",
+         y = expression(i[total] * " range across biopsy sites"))
+
+
+```
+
+
+# Driver categorization
+
+For each annotation, we compute the SD of group-level median jsd (across-cell
+heterogeneity) and median i_total (within-cell heterogeneity) across biopsy
+locations. If one SD is at least 1.5x the other, that entropy component
+dominates. Annotations where both SDs fall below the 30th percentile are
+labelled "neither".
+
+```{r drivers, fig.width = 5, fig.height = 5}
+crc_grp_for_driver <- adj_df %>%
+  rename(median_adjH = median_shannon, median_adjS = sampen)
+
+driver_df <- categorize_drivers(crc_grp_for_driver, "location")
+
+cat("Driver table:\n")
+print(table(driver_df$driver))
+
+saveRDS(driver_df, file = "crc_driver_sd_range.rds")
+
+plot_driver_scatter(driver_df,
+                    x_label = "SD of jsd across biopsy locations",
+                    y_label = expression("SD of " * i[total] * " across biopsy locations"))
+```
+
 
 # Session
 
-```{r session}
+```{r, cache = FALSE}
 sessionInfo()
 ```

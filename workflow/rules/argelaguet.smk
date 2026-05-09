@@ -19,19 +19,57 @@ Path convention:
 ARG_DATA = op.join(RESULTS, "argelaguet")
 ARG_CELLS = op.join(ARG_DATA, "cells")
 ARG_FEATURES_DIR = op.join(ARG_DATA, "features")
+ARG_MM10_DIR = op.join(ARG_DATA, "mm10")
 
 ARG_RUN_NAME = config["argelaguet"]["run_name"]
 ARG_RUN = op.join(RESULTS, ARG_RUN_NAME)
 
-## Gastrulation-specific features bundled in the scnmt_gastrulation tarball
-## (features/genomic_contexts/). H3K27ac distal peaks: GSE125318 companion
-## ChIP-seq (see Methods). ESC marks: ENCODE.
-_ARGELAGUET_GASTRO_BEDS = [
-    "H3K27ac_distal_E7.5_Ect_intersect12",
-    "H3K27ac_distal_E7.5_End_intersect12",
-    "H3K27ac_distal_E7.5_Mes_intersect12",
-    "ESC_p300",
-]
+## Annotation set mirrors yamet's nested ARGELAGUET_ANNOTATIONS dict
+## (yamet/rules/argelaguet.smk). Outer key = category, inner key = annotation
+## name; the annotation name is the wildcard that yamet uses ({annotation}).
+_ARGELAGUET_MM10_ANNOTATIONS = {
+    "chip":      ["h3k4me3", "h3k9me3", "h3k27me3", "h3k4me1", "h3k27ac"],
+    "genes":     ["genes"],
+    "lines":     ["lines"],
+    "sines":     ["sines"],
+    "promoters": ["promoters"],
+}
+
+## Gastrulation-specific source filenames inside the scnmt_gastrulation
+## features tarball. Keys are yamet's sanitized annotation wildcard values.
+_ARGELAGUET_GASTRO_BEDS = {
+    "enh-E75-Ect":        "H3K27ac_distal_E7.5_Ect_intersect12.bed",
+    "enh-E75-End":        "H3K27ac_distal_E7.5_End_intersect12.bed",
+    "enh-E75-Mes":        "H3K27ac_distal_E7.5_Mes_intersect12.bed",
+    "enh-E75-union":      "H3K27ac_distal_E7.5_union_intersect12.bed",
+    "h3k4me3-E75-Ect":    "H3K4me3_E7.5_Ect.bed",
+    "h3k4me3-E75-End":    "H3K4me3_E7.5_End.bed",
+    "h3k4me3-E75-Mes":    "H3K4me3_E7.5_Mes.bed",
+    "h3k4me3-E75-common": "H3K4me3_E7.5_common.bed",
+    "esc-p300":           "ESC_p300.bed",
+    "esc-dhs":            "ESC_DHS.bed",
+}
+
+_ARGELAGUET_GASTRO_ANNOTATIONS = {
+    "enh_gastro":  [k for k in _ARGELAGUET_GASTRO_BEDS if k.startswith("enh-")],
+    "h3k4me3_E75": [k for k in _ARGELAGUET_GASTRO_BEDS if k.startswith("h3k4me3-")],
+    "esc":         [k for k in _ARGELAGUET_GASTRO_BEDS if k.startswith("esc-")],
+}
+
+ARGELAGUET_ANNOTATIONS = {
+    **_ARGELAGUET_MM10_ANNOTATIONS,
+    **_ARGELAGUET_GASTRO_ANNOTATIONS,
+}
+
+_MM10_ANN_NAMES = [a for cat in _ARGELAGUET_MM10_ANNOTATIONS
+                   for a in _ARGELAGUET_MM10_ANNOTATIONS[cat]]
+
+_ALL_ARGELAGUET_ANN_NAMES = sorted(
+    set(_MM10_ANN_NAMES) | set(_ARGELAGUET_GASTRO_BEDS.keys())
+)
+
+ARGELAGUET_STRATIFY_BY = ["stage", "lineage"]
+ARGELAGUET_MAX_CELLS = config.get("argelaguet", {}).get("max_cells_per_combo", 20)
 
 
 rule filter_argelaguet_metadata:
@@ -52,8 +90,9 @@ rule filter_argelaguet_metadata:
         """
 
 
-rule make_argelaguet_manifest:
-    """Build amet cells.tsv from the filtered metadata + local cell files."""
+checkpoint make_argelaguet_manifest:
+    """Build amet cells.tsv from the filtered metadata + local cell files.
+    Checkpoint so the per-(stage, lineage) DAG fans out from the manifest."""
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
@@ -75,68 +114,91 @@ rule make_argelaguet_manifest:
         """
 
 
-rule argelaguet_filter_mm10_bed:
-    """Subset a feature BED to chr19 (prototype scope), cap to N intervals, and
-    stamp each peak with a unique feature_id of the form <annotation>_<index>.
-    The Rmd recovers the annotation by stripping the trailing _<digits>.
+rule argelaguet_per_combo_manifest:
+    """Subset cells.tsv to one (sanitized stage, sanitized lineage) pair.
+    Mirrors yamet's get_argelaguet_harmonized_files plate-stratified
+    top-N-by-coverage selection."""
+    conda:
+        op.join("..", "envs", "python.yml")
+    input:
+        cells = op.join(ARG_DATA, "cells.tsv"),
+    output:
+        manifest = op.join(ARG_DATA, "manifests",
+                           "{stage}_{lineage}.tsv"),
+    params:
+        max_cells = ARGELAGUET_MAX_CELLS,
+    log:
+        op.join(ARG_DATA, "logs", "manifest_{stage}_{lineage}.log"),
+    shell:
+        """
+        python {workflow.basedir}/scripts/argelaguet_subset_manifest.py \
+            --cells {input.cells} \
+            --stage {wildcards.stage} \
+            --lineage {wildcards.lineage} \
+            --max-cells {params.max_cells} \
+            --out {output.manifest} &> {log}
+        """
+
+
+def _argelaguet_bed_source(wildcards):
+    """Resolve the BED source path for an annotation wildcard.
+
+    mm10 annotations come from results/argelaguet/mm10/<ann>.bed.gz;
+    gastrulation-specific annotations come from
+    results/argelaguet/features/<filename> per yamet's _ARGELAGUET_GASTRO_BEDS
+    map.
     """
+    if wildcards.annotation in _MM10_ANN_NAMES:
+        return op.join(ARG_MM10_DIR, f"{wildcards.annotation}.bed.gz")
+    return op.join(ARG_FEATURES_DIR,
+                   _ARGELAGUET_GASTRO_BEDS[wildcards.annotation])
+
+
+rule argelaguet_filter_annotation_bed:
+    """Stage one annotation BED: gunzip if needed, strip 'chr' prefix, and
+    stamp each peak with feature_id = <annotation>_<index>. Whole-genome,
+    matching yamet's ARGELAGUET_CHR10_ONLY = False default."""
     conda:
         op.join("..", "envs", "bedtools.yml")
+    wildcard_constraints:
+        annotation = "|".join(_ALL_ARGELAGUET_ANN_NAMES),
     input:
-        bed = op.join(ARG_FEATURES_DIR, "{annotation}.bed"),
+        bed = _argelaguet_bed_source,
     output:
-        bed = temp(op.join(ARG_RUN, "beds", "{annotation}.bed")),
-    params:
-        n_max = config["prototype"]["features_subset"],
+        bed = op.join(ARG_RUN, "beds", "{annotation}.bed"),
     log:
         op.join(ARG_RUN, "logs", "filter_bed_{annotation}.log"),
     shell:
         r"""
         mkdir -p $(dirname {output.bed})
-        echo "[filter_bed] {wildcards.annotation}: cap=N={params.n_max}, chr19 only" > {log}
-        awk -v ann={wildcards.annotation} -v n={params.n_max} '
+        echo "[filter_bed] {wildcards.annotation}: whole-genome" > {log}
+        if [[ "{input.bed}" == *.gz ]]; then
+            CAT="zcat"
+        else
+            CAT="cat"
+        fi
+        $CAT {input.bed} | awk -v ann={wildcards.annotation} '
              BEGIN{{OFS="\t"; k=0}}
              {{ chr=$1; sub(/^chr/, "", chr);
-                if (chr == "19" && ++k <= n)
-                    print $1, $2, $3, ann "_" k }}' {input.bed} > {output.bed}
+                k++;
+                print chr, $2, $3, ann "_" k }}' > {output.bed}
         echo "[filter_bed] kept $(wc -l < {output.bed}) intervals" >> {log}
         """
 
 
-rule argelaguet_prep_gastro_bed:
-    """Concatenate per-annotation BEDs into one merged feature BED."""
-    conda:
-        op.join("..", "envs", "bedtools.yml")
-    input:
-        beds = expand(op.join(ARG_RUN, "beds", "{annotation}.bed"),
-                      annotation = _ARGELAGUET_GASTRO_BEDS),
-    output:
-        bed = op.join(ARG_RUN, "beds", "gastro_features.bed"),
-    log:
-        op.join(ARG_RUN, "logs", "prep_gastro_bed.log"),
-    shell:
-        r"""
-        cat {input.beds} | sort -k1,1 -k2,2n > {output.bed}
-        echo "[prep_gastro] merged $(wc -l < {output.bed}) intervals from $(echo {input.beds} | wc -w) BEDs" > {log}
-        """
-
-
 rule argelaguet_make_windows:
-    """Tiled chr19 windows for the windows/embeddings analysis. Each row is a
-    distinct feature_id (chrom:start-end). Whole chr19, prototype-scope size."""
+    """Tiled whole-genome windows for the windows/embeddings analysis.
+    Strips 'chr' to match Ensembl-named cells."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
-        sizes = op.join(REFS, "mm10_ucsc", "chr19.sizes"),
+        sizes = op.join(REFS, "mm10_ucsc", "genome.sizes"),
     output:
         bed = op.join(ARG_RUN, "beds", "windows.bed"),
     params:
         win_size = config["argelaguet"]["window_size"],
     shell:
         r"""
-        # Strip 'chr' to match Ensembl-named cells; amet's chrom harmonization
-        # would also handle the mismatch, but Stripping here keeps the windows
-        # BED self-consistent with the gastro_features BED.
         bedtools makewindows -g {input.sizes} -w {params.win_size} \
           | awk 'BEGIN{{OFS="\t"}} {{sub(/^chr/,"",$1); print $1, $2, $3, "win_"NR}}' \
           | sort -k1,1 -k2,2n > {output.bed}
@@ -161,32 +223,38 @@ rule chr19_sizes:
         """
 
 
-rule run_amet_on_argelaguet_scope:
-    """Run amet on a {scope} BED. scope is 'features' or 'windows'."""
+rule run_amet_on_argelaguet_features:
+    """Run amet on one (annotation, stage, lineage) combo. Mirrors yamet's
+    run_yamet_on_argelaguet_features wildcards: {annotation, stage, lineage},
+    where stage and lineage are sanitized strings (gsub '[ ._]' '-')."""
     wildcard_constraints:
-        scope = "features|windows",
+        annotation = "|".join(_ALL_ARGELAGUET_ANN_NAMES),
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
         binary = AMET,
-        cells = op.join(ARG_DATA, "cells.tsv"),
-        genome = op.join(REFS, "mm10_ucsc", "chr19.fa"),
-        bed = lambda w: op.join(
-            ARG_RUN, "beds",
-            "gastro_features.bed" if w.scope == "features" else "windows.bed",
-        ),
+        cells = op.join(ARG_DATA, "manifests", "{stage}_{lineage}.tsv"),
+        genome = op.join(REFS, "mm10_ucsc", "genome.fa"),
+        bed = op.join(ARG_RUN, "beds", "{annotation}.bed"),
     output:
-        cell_feature = op.join(ARG_RUN, ARG_RUN_NAME + ".{scope}.cell_feature.tsv.gz"),
-        feature = op.join(ARG_RUN, ARG_RUN_NAME + ".{scope}.feature.tsv.gz"),
+        cell_feature = op.join(
+            ARG_RUN, "features",
+            "{annotation}_{stage}_{lineage}.cell_feature.tsv.gz"),
+        feature = op.join(
+            ARG_RUN, "features",
+            "{annotation}_{stage}_{lineage}.feature.tsv.gz"),
     params:
-        prefix = op.join(ARG_RUN, ARG_RUN_NAME + ".{scope}"),
+        prefix = op.join(
+            ARG_RUN, "features",
+            "{annotation}_{stage}_{lineage}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
         min_cells = config["amet"]["min_cells_per_group"],
         thresh = config["amet"]["meth_call_threshold"],
-    threads: min(workflow.cores, 8)
+    threads: min(workflow.cores, 4)
     log:
-        op.join(ARG_RUN, "logs", "amet_{scope}.log"),
+        op.join(ARG_RUN, "logs",
+                "amet_{annotation}_{stage}_{lineage}.log"),
     shell:
         """
         mkdir -p $(dirname {params.prefix})
@@ -203,36 +271,90 @@ rule run_amet_on_argelaguet_scope:
         """
 
 
-rule render_argelaguet_report:
-    """Single paper report combining feature-level and window-level analyses."""
+rule run_amet_on_argelaguet_windows:
+    """Run amet over all cells on chr19 windows. Mirrors yamet's
+    run_yamet_on_argelaguet_windows: one big run, all cells, no stratum
+    wildcard."""
     conda:
-        op.join("..", "envs", "r-tools.yml")
+        op.join("..", "envs", "bedtools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet.Rmd"),
-        feat_cell_feature = op.join(ARG_RUN, ARG_RUN_NAME + ".features.cell_feature.tsv.gz"),
-        feat_feature = op.join(ARG_RUN, ARG_RUN_NAME + ".features.feature.tsv.gz"),
-        feat_bed = op.join(ARG_RUN, "beds", "gastro_features.bed"),
-        win_cell_feature = op.join(ARG_RUN, ARG_RUN_NAME + ".windows.cell_feature.tsv.gz"),
-        win_feature = op.join(ARG_RUN, ARG_RUN_NAME + ".windows.feature.tsv.gz"),
-        win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
-        manifest = op.join(ARG_DATA, "cells.tsv"),
+        binary = AMET,
+        cells = op.join(ARG_DATA, "cells.tsv"),
+        genome = op.join(REFS, "mm10_ucsc", "genome.fa"),
+        bed = op.join(ARG_RUN, "beds", "windows.bed"),
     output:
-        html = op.join(ARG_RUN, ARG_RUN_NAME + ".html"),
+        cell_feature = op.join(
+            ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
+        feature = op.join(
+            ARG_RUN, "windows", "all.feature.tsv.gz"),
     params:
-        out_dir = ARG_RUN,
-        run_name = ARG_RUN_NAME,
+        prefix = op.join(ARG_RUN, "windows", "all"),
+        i_max_lag = config["amet"]["i_max_lag"],
+        min_cpgs = config["amet"]["min_cpgs_per_feature"],
+        min_cells = config["amet"]["min_cells_per_group"],
+        thresh = config["amet"]["meth_call_threshold"],
+    threads: min(workflow.cores, 8)
     log:
-        op.join(ARG_RUN, "logs", "render.log"),
+        op.join(ARG_RUN, "logs", "amet_windows.log"),
     shell:
-        r"""
+        """
+        mkdir -p $(dirname {params.prefix})
+        {input.binary} \
+            --genome {input.genome} \
+            --cells {input.cells} \
+            --features {input.bed} \
+            --output-prefix {params.prefix} \
+            --i-max-lag {params.i_max_lag} \
+            --min-cpgs-per-feature {params.min_cpgs} \
+            --min-cells-per-group {params.min_cells} \
+            --meth-call-threshold {params.thresh} \
+            --threads {threads} &> {log}
+        """
+
+
+def _argelaguet_combos():
+    """Read cells.tsv after the manifest checkpoint and return sorted unique
+    (sanitized stage, sanitized lineage) pairs that have at least one cell.
+    Mirrors yamet's iteration over distinct (stage_san, lineage_san) groups."""
+    import csv
+    import re
+
+    def san(x):
+        return re.sub(r"[ ._]", "-", str(x))
+
+    manifest_path = checkpoints.make_argelaguet_manifest.get().output.manifest
+    pairs = set()
+    with open(manifest_path) as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            stage = row.get("stage")
+            lineage = row.get("lineage10x")
+            if stage and lineage:
+                pairs.add((san(stage), san(lineage)))
+    return sorted(pairs)
+
+
+def list_argelaguet_features_outputs(wildcards):
+    """All (annotation x stage x lineage) amet output files."""
+    combos = _argelaguet_combos()
+    out = []
+    for ann in _ALL_ARGELAGUET_ANN_NAMES:
+        for stage, lineage in combos:
+            out.append(op.join(ARG_RUN, "features",
+                               f"{ann}_{stage}_{lineage}.cell_feature.tsv.gz"))
+            out.append(op.join(ARG_RUN, "features",
+                               f"{ann}_{stage}_{lineage}.feature.tsv.gz"))
+    return out
+
+
+def _argelaguet_render_shell():
+    return r"""
         mkdir -p {params.out_dir}
         Rscript -e 'rmarkdown::render("{input.rmd}",
-            output_file="{params.run_name}.html",
+            output_file="{wildcards.rmd_name}.html",
             output_dir="{params.out_dir}",
+            knit_root_dir="{params.out_dir}",
             params=list(
-                feat_cell_feature="{input.feat_cell_feature}",
-                feat_feature="{input.feat_feature}",
-                feat_bed="{input.feat_bed}",
+                features_dir="{params.features_dir}",
                 win_cell_feature="{input.win_cell_feature}",
                 win_feature="{input.win_feature}",
                 win_bed="{input.win_bed}",
@@ -240,3 +362,58 @@ rule render_argelaguet_report:
                 out_dir="{params.out_dir}"),
             quiet=TRUE)' &> {log}
         """
+
+
+rule render_argelaguet_analytical_rmd:
+    """Render one of the three analytical Rmds (argelaguet, _embeddings,
+    _windows). Inputs cover the full {annotation x stage x lineage} grid
+    (one TSV pair per combo) plus the windows-all-cells run."""
+    wildcard_constraints:
+        rmd_name = "argelaguet|argelaguet_embeddings|argelaguet_windows",
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        features = list_argelaguet_features_outputs,
+        win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
+        manifest = op.join(ARG_DATA, "cells.tsv"),
+    output:
+        html = op.join(ARG_RUN, "{rmd_name}.html"),
+    params:
+        out_dir = ARG_RUN,
+        features_dir = op.join(ARG_RUN, "features"),
+    log:
+        op.join(ARG_RUN, "logs", "render_{rmd_name}.log"),
+    shell:
+        _argelaguet_render_shell()
+
+
+rule render_fig_argelaguet_rmd:
+    """Render fig_argelaguet.Rmd; depends on the three analytical Rmds because
+    it loads their RDS intermediates."""
+    wildcard_constraints:
+        rmd_name = "fig_argelaguet",
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        analytical = expand(op.join(ARG_RUN, "{r}.html"),
+                            r = ["argelaguet",
+                                 "argelaguet_embeddings",
+                                 "argelaguet_windows"]),
+        features = list_argelaguet_features_outputs,
+        win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
+        manifest = op.join(ARG_DATA, "cells.tsv"),
+    output:
+        html = op.join(ARG_RUN, "{rmd_name}.html"),
+    params:
+        out_dir = ARG_RUN,
+        features_dir = op.join(ARG_RUN, "features"),
+    log:
+        op.join(ARG_RUN, "logs", "render_{rmd_name}.log"),
+    shell:
+        _argelaguet_render_shell()

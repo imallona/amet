@@ -10,10 +10,12 @@ dependencies:
   - r-ggplot2
   - r-dplyr
   - r-tidyr
+  - r-readr
   - r-patchwork
   - r-svglite
   - r-ggridges
   - r-uwot
+  - r-irlba
   - r-viridis
   - r-ggrepel
   - r-reshape2
@@ -22,6 +24,15 @@ dependencies:
   - r-knitr
   - r-shiny
   - r-httpuv
+  - r-circlize
+  - r-ggrastr
+  - r-cowplot
+  - r-matrixstats
+  - r-cluster
+  - r-bookdown
+  - bioconductor-biocparallel
+  - bioconductor-complexheatmap
+  - bioconductor-pcamethods
   - bioconductor-singlecellexperiment
   - bioconductor-summarizedexperiment
   - bioconductor-qvalue

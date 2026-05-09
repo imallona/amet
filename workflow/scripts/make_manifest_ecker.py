@@ -29,15 +29,12 @@ proto_cell_types = [s for s in args.proto_cell_types.split(",") if s]
 meta = pd.read_csv(args.meta, sep="\t", compression="gzip")
 print(f"[manifest] meta rows: {len(meta)}")
 
-# Region filter (e.g. MOp). Match against any column whose name suggests
-# region; if none of the columns exist we keep everything.
-region_cols = [c for c in ("region", "sub_region") if c in meta.columns]
-if region_cols and args.region:
-    mask = pd.Series(False, index=meta.index)
-    for c in region_cols:
-        mask |= meta[c].astype(str).str.contains(args.region, na=False)
-    meta = meta[mask]
-    print(f"[manifest] after region={args.region}: {len(meta)}")
+# Region filter (e.g. MOp). Exact-match against sub_region (the cortical
+# area) — yamet's substring match could mis-grab cells from MOpUL/MOp2/etc.
+# Atlas-dissection slabs (region = 2C/3C/4B/5D) are not used for filtering.
+if "sub_region" in meta.columns and args.region:
+    meta = meta[meta["sub_region"].astype(str) == args.region]
+    print(f"[manifest] after sub_region == {args.region}: {len(meta)}")
 
 # Restrict to cells whose tar is present locally.
 have_tar = []
@@ -73,7 +70,9 @@ out = pd.DataFrame({
     "path": meta["basename"].apply(cell_path).apply(op.abspath),
     "format": "allc",
 })
-for c in ("cell_class", "major_type", "region", "sub_region", "plate"):
+## Keep yamet's column names: sub_type and sub_region must both be available
+## as separate keys (the wildcard names {sub_region, sub_type} read these).
+for c in ("sub_type", "cell_class", "major_type", "region", "sub_region", "plate"):
     if c in meta.columns:
         out[c] = meta[c].astype(str).values
 

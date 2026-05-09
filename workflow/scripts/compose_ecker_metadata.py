@@ -32,22 +32,31 @@ nemo["basename"] = (
 
 
 def _read_paper(path):
-    # The supplementary xlsx has multiple sheets; we want the cell-level table.
-    sheets = pd.read_excel(path, sheet_name=None, engine="openpyxl")
-    # Pick the largest sheet with a CellID-like column.
-    best = None
-    for name, df in sheets.items():
-        if not len(df):
-            continue
-        cands = [c for c in df.columns if re.search("cell.?id|sample", str(c), re.I)]
-        if not cands:
-            continue
-        if best is None or len(df) > len(best[1]):
-            best = (cands[0], df)
-    if best is None:
+    """Parse the Ecker supplementary xlsx.
+
+    Sheet1 starts with a column-key dictionary (rows 0..N) and then the actual
+    cell-level table whose first column holds the cell id but is unnamed.
+    Locate the header row by scanning for one whose non-NA cell count jumps
+    relative to the dictionary preamble; treat the first column of the
+    sub-table as cell_id.
+    """
+    raw = pd.read_excel(path, sheet_name=0, engine="openpyxl",
+                        header=None, nrows=200)
+    counts = raw.notna().sum(axis=1)
+    header_row = None
+    for i, c in enumerate(counts):
+        if c >= 6 and (i == 0 or counts.iloc[i - 1] <= 2):
+            header_row = i
+            break
+    if header_row is None:
         return pd.DataFrame()
-    cell_col, df = best
-    df = df.rename(columns={cell_col: "cell_id"})
+    df = pd.read_excel(path, sheet_name=0, engine="openpyxl",
+                       header=header_row)
+    first_col = df.columns[0]
+    if pd.isna(first_col) or str(first_col).startswith("Unnamed"):
+        df = df.rename(columns={first_col: "cell_id"})
+    else:
+        df.insert(0, "cell_id", df[first_col])
     return df
 
 

@@ -8,7 +8,7 @@ REFS = op.join(RESULTS, "refs")
 
 METHOD = op.join(REPO_ROOT, "method")
 ## Cargo.lock is gitignored (binary build artifact), so it's not listed as
-## an input — cargo regenerates it from Cargo.toml on each build.
+## an input. cargo regenerates it from Cargo.toml on each build.
 AMET_SOURCES = (
     glob(op.join(METHOD, "src", "**", "*.rs"), recursive=True)
     + glob(op.join(METHOD, "tests", "*.rs"))

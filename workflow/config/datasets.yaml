@@ -85,7 +85,8 @@ crc:
 amet:
   i_max_lag: 3
   min_cpgs_per_feature: 5
-  # prototype scope: lowered to 2 for laptop smoke-tests with cells_per_group=2.
-  # Set back to 10 (or higher) for the full-scale run.
+  # Lower bound on cells per stratum before amet emits jsd. Set low so
+  # prototype runs with sparse strata still produce JSD rows; raise to 10+
+  # for the full run if you want to suppress noisy small-group estimates.
   min_cells_per_group: 2
   meth_call_threshold: 0.1

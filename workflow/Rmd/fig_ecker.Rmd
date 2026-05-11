@@ -329,21 +329,30 @@ if (!is.null(ve_long)) {
 ```
 
 ```{r fe-panel-g-v2}
+## lm requires cell_class to have >= 2 levels; in prototype runs (few
+## sub_types from one cell_class) it can collapse to one.
+safe_r2 <- function(d) {
+  if (length(unique(stats::na.omit(d$cell_class))) < 2) return(NA_real_)
+  summary(lm(median_adjS ~ cell_class, data = d))$r.squared
+}
 r2_by_ann <- grp %>%
   group_by(annotation) %>%
-  summarise(
-    r2 = summary(lm(median_adjS ~ cell_class, data = cur_data()))$r.squared,
-    .groups = "drop"
-  )
+  summarise(r2 = safe_r2(cur_data()), .groups = "drop") %>%
+  filter(!is.na(r2))
 write.csv(r2_by_ann, "ecker_fig_i_total_r2_by_cell_class.csv", row.names = FALSE)
 
-pG_v2 <- ggplot(r2_by_ann, aes(x = reorder(annotation, r2), y = r2)) +
-  geom_col(fill = "#0072B2") +
-  coord_flip() +
-  labs(x = NULL, y = expression(R^2 * " (" * i[total] * " by cell class)")) +
-  theme_ng(base_size = 7) +
-  theme(axis.text.y = element_text(size = 5.5),
-        plot.margin = margin(0, 0, 0, 0, "mm"))
+if (nrow(r2_by_ann) > 0) {
+  pG_v2 <- ggplot(r2_by_ann, aes(x = reorder(annotation, r2), y = r2)) +
+    geom_col(fill = "#0072B2") +
+    coord_flip() +
+    labs(x = NULL, y = expression(R^2 * " (" * i[total] * " by cell class)")) +
+    theme_ng(base_size = 7) +
+    theme(axis.text.y = element_text(size = 5.5),
+          plot.margin = margin(0, 0, 0, 0, "mm"))
+} else {
+  pG_v2 <- patchwork::plot_spacer() +
+    labs(title = "R^2 by cell_class: insufficient cell_class levels")
+}
 ```
 
 ```{r fe-panel-h-v2}

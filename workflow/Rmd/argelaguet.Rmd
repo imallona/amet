@@ -1,0 +1,773 @@
+---
+title: "Argelaguet 2019 mouse gastrulation: methylation entropy by feature (CpG context)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+author: "Izaskun Mallona"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+    number_sections: true
+    df_print: default
+    theme: lumen
+params:
+  features_dir: ""
+  win_cell_feature: ""
+  win_feature: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(data.table)
+  library(readr)
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(BiocParallel)
+  library(ggrepel)
+  library(ggridges)
+  library(ComplexHeatmap)
+  library(circlize)
+  library(uwot)
+  library(irlba)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+source(file.path(repo_root, "workflow", "scripts", "driver_utils.R"))
+source(file.path(repo_root, "workflow", "scripts", "embedding_utils.R"))
+param <- SerialParam()
+```
+
+```{r opts}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  fig.width  = 5,
+  fig.height = 5,
+  cache      = FALSE,
+  include    = TRUE,
+  fig.path   = "argelaguet_plots/",
+  dev        = c("png", "svg"),
+  dpi        = 500,
+  cache.lazy = FALSE,
+  warning    = TRUE,
+  message    = TRUE
+)
+```
+
+Mouse (mm10 / GRCm38), CpG context. TET TKO cells (Plate11-16) excluded.
+Only cells passing methylation QC included.
+
+```{r helpers}
+ann_labels <- c(
+  "genes"            = "Genes",
+  "promoters"        = "Promoters",
+  "lines"            = "LINEs",
+  "sines"            = "SINEs",
+  "h3k4me3"          = "H3K4me3 (ENCODE)",
+  "h3k9me3"          = "H3K9me3 (ENCODE)",
+  "h3k27me3"         = "H3K27me3 (ENCODE)",
+  "h3k4me1"          = "H3K4me1 (ENCODE)",
+  "h3k27ac"          = "H3K27ac (ENCODE)",
+  ## gastrulation-specific from GSE125318 (E7.5 ChIP-seq)
+  "enh-E75-Ect"      = "Enh E7.5 Ect",
+  "enh-E75-End"      = "Enh E7.5 End",
+  "enh-E75-Mes"      = "Enh E7.5 Mes",
+  "enh-E75-union"    = "Enh E7.5 union",
+  "h3k4me3-E75-Ect"      = "H3K4me3 E7.5 Ect",
+  "h3k4me3-E75-End"      = "H3K4me3 E7.5 End",
+  "h3k4me3-E75-Mes"      = "H3K4me3 E7.5 Mes",
+  "h3k4me3-E75-common"   = "H3K4me3 E7.5 common",
+  ## ESC marks from ENCODE
+  "esc-p300"         = "ESC p300",
+  "esc-dhs"          = "ESC DHS"
+)
+
+harmonize_levels <- function(df) {
+  missing_ann <- setdiff(unique(df$annotation), names(ann_labels))
+  if (length(missing_ann) > 0)
+    warning("unknown annotations: ", paste(missing_ann, collapse = ", "))
+  df$annotation <- factor(df$annotation,
+                           levels = names(ann_labels),
+                           labels = unname(ann_labels))
+  if ("stage" %in% names(df))
+    df$stage <- factor(df$stage, levels = sort(unique(df$stage)))
+  df
+}
+
+## Sanitize metadata strings the same way the smk does for wildcard values.
+sanitize <- function(x) gsub("[ ._]", "-", x)
+
+## Recover annotation prefix from amet feature_id (<annotation>_<index>).
+recover_annotation <- function(fid) sub("_\\d+$", "", fid)
+
+## Filename parsers:
+##   filename = "<annotation>_<stage>_<lineage>.cell_feature.tsv.gz"
+##   annotation may itself contain hyphens; stage and lineage are the trailing
+##   two underscore-separated tokens before the extension.
+get_annotation <- function(fn) sub("^(.*)_[^_]+_[^_]+\\..*$", "\\1", fn)
+get_stage      <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$", "\\1", fn)
+get_lineage    <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",   "\\1", fn)
+```
+
+```{r load_metadata}
+man <- fread(params$manifest)
+meta_cells <- as.data.frame(man) %>%
+  mutate(
+    stage_san   = sanitize(stage),
+    lineage_san = sanitize(lineage10x)
+  )
+
+meta_grp <- meta_cells %>%
+  group_by(stage_san, lineage_san) %>%
+  summarise(
+    stage         = first(stage),
+    lineage       = first(lineage10x),
+    lineage_class = {
+      if ("lineage10x_2" %in% names(meta_cells)) {
+        vals <- lineage10x_2[!is.na(lineage10x_2) & lineage10x_2 != ""]
+        if (length(vals) == 0) NA_character_ else first(vals)
+      } else NA_character_
+    },
+    n_meta        = n(),
+    .groups       = "drop"
+  )
+
+cat("Groups (stage x lineage):", nrow(meta_grp), "\n")
+cat("Stages:", paste(sort(unique(meta_grp$stage)), collapse = ", "), "\n")
+cat("Lineage classes:", paste(sort(unique(meta_grp$lineage_class)), collapse = ", "), "\n")
+```
+
+```{r load_amet}
+## Each amet run produced one TSV pair per (annotation, stage, lineage)
+## combo. Enumerate files, parse the wildcard values from filenames,
+## concatenate.
+features_dir <- params$features_dir
+cf_files <- list.files(features_dir,
+                       pattern = "\\.cell_feature\\.tsv\\.gz$",
+                       full.names = TRUE)
+fe_files <- list.files(features_dir,
+                       pattern = "\\.feature\\.tsv\\.gz$",
+                       full.names = TRUE)
+fe_files <- fe_files[!grepl("\\.cell_feature\\.tsv\\.gz$", fe_files)]
+
+## Aggregate per cell at read time: feat_cf collapses from O(cells * features
+## * strata * annotations) rows to O(cells * strata * annotations). Every
+## downstream plot/embedding already averages over features per cell, so no
+## information is lost.
+read_combo_cf <- function(fp) {
+  fn <- basename(fp)
+  base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
+  dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
+  agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
+                i_total = mean(i_total, na.rm = TRUE)),
+            by = cell_id]
+  agg[, annotation := get_annotation(paste0(base, ".x"))]
+  agg[, stage_san := get_stage(paste0(base, ".x"))]
+  agg[, lineage_san := get_lineage(paste0(base, ".x"))]
+  agg
+}
+
+read_combo_fe <- function(fp) {
+  fn <- basename(fp)
+  base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
+  dt <- fread(fp)
+  dt[, annotation := get_annotation(paste0(base, ".x"))]
+  dt[, stage_san := get_stage(paste0(base, ".x"))]
+  dt[, lineage_san := get_lineage(paste0(base, ".x"))]
+  dt
+}
+
+feat_cf <- rbindlist(lapply(cf_files, read_combo_cf), fill = TRUE)
+feat_fe <- rbindlist(lapply(fe_files, read_combo_fe), fill = TRUE)
+
+cat("loaded", length(cf_files), "cell_feature TSVs and",
+    length(fe_files), "feature TSVs from", features_dir, "\n")
+
+## Attach stage, lineage, lineage_class by stratum only (one row per
+## (stage_san, lineage_san), not per cell). Update by reference so we don't
+## copy feat_cf.
+meta_grp_dt <- as.data.table(meta_grp)[, .(stage_san, lineage_san,
+                                            stage, lineage, lineage_class)]
+feat_cf[meta_grp_dt, on = .(stage_san, lineage_san),
+        `:=`(stage = i.stage,
+             lineage = i.lineage,
+             lineage_class = i.lineage_class)]
+```
+
+<!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue, so the S sample-entropy block (scatter and violin) is not reproduced. -->
+
+# adjS - methylation-adjusted sample entropy {.tabset .tabset-pills}
+
+Per-cell normalised sample entropy from amet's per-cell-per-feature output
+(amet `i_total`, the within-cell mutual-information score).
+
+```{r import_adjS}
+adjsampens <- as.data.frame(feat_cf)
+adjsampens$sampen   <- adjsampens$i_total
+adjsampens$avg_meth <- adjsampens$mean_meth
+adjsampens <- harmonize_levels(adjsampens)
+```
+
+## adjS vs methylation
+
+```{r scatter_adjS, fig.width = ng_fig_size(5, 9)$w, fig.height = ng_fig_size(5, 9)$h}
+ggplot(adjsampens %>% filter(!is.na(lineage_class)),
+       aes(x = avg_meth, y = sampen, color = lineage_class)) +
+  geom_point(size = 0.3, alpha = 0.15) +
+  scale_color_manual(values = argelaguet_lineage_class_pal, na.value = "grey70") +
+  facet_grid(annotation ~ stage) +
+  labs(x = "average methylation", y = expression(i[total]),
+       color = "lineage class") +
+  guides(color = guide_legend(override.aes = list(size = 2.5, alpha = 1))) +
+  theme_ng()
+```
+
+## adjS distributions
+
+```{r ridges_adjS, fig.width = ng_fig_size(4, 9)$w, fig.height = ng_fig_size(4, 9)$h}
+ggplot(adjsampens %>% filter(!is.na(lineage_class)),
+       aes(x = sampen, y = lineage, fill = lineage_class)) +
+  geom_density_ridges(alpha = 0.6, scale = 0.85) +
+  scale_fill_manual(values = argelaguet_lineage_class_pal) +
+  facet_grid(annotation ~ stage, scales = "free") +
+  labs(x = expression(i[total])) +
+  theme_ng() +
+  theme(legend.position = "none")
+```
+
+<!-- Section dropped: amet ships only methylation-stable jsd, no raw Shannon entropy analogue, so the H Shannon-entropy median block (scatter) is not reproduced. -->
+
+# adjH - methylation-adjusted Shannon entropy {.tabset .tabset-pills}
+
+Per-feature jsd from amet's feature TSV (amet `jsd`, the multi-distribution
+Jensen-Shannon divergence across cells in a group).
+
+```{r import_adjH}
+## Aggregate amet's per-feature jsd to one median per (annotation,
+## stage_san, lineage_san) so the downstream group_medians join doesn't
+## explode.
+adjshannons <- as.data.frame(
+  as.data.table(feat_fe)[
+    , .(median_shannon  = median(jsd, na.rm = TRUE),
+        median_avg_meth = median(mean_meth_mean, na.rm = TRUE)),
+    by = .(annotation, stage_san, lineage_san)
+  ]
+)
+adjshannons <- harmonize_levels(adjshannons)
+adjshannons <- adjshannons %>%
+  left_join(meta_grp %>% select(stage_san, lineage_san, stage, lineage,
+                                 lineage_class),
+            by = c("stage_san", "lineage_san"))
+```
+
+## Median adjH vs methylation
+
+```{r scatter_adjH, fig.width = ng_fig_size(4, 9)$w, fig.height = ng_fig_size(4, 9)$h}
+ggplot(adjshannons %>% filter(!is.na(lineage_class)),
+       aes(x = median_avg_meth, y = median_shannon, color = lineage_class)) +
+  geom_point(size = 1.5, alpha = 0.8) +
+  scale_color_manual(values = argelaguet_lineage_class_pal, na.value = "grey70") +
+  facet_grid(annotation ~ stage) +
+  labs(x = "median avg. methylation", y = "jsd",
+       color = "lineage class") +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme_ng()
+```
+
+# Assembly {.tabset .tabset-pills}
+
+adjS (i_total) is per-cell. adjH (jsd) is per-feature per-group.
+
+```{r group_medians}
+saveRDS(
+  list(adjsampens  = adjsampens,
+       adjshannons = adjshannons),
+  file = "argelaguet_entropy.rds"
+)
+
+adjS_grp <- adjsampens %>%
+  group_by(annotation, stage_san, lineage_san) %>%
+  summarise(median_adjS = median(sampen,    na.rm = TRUE),
+            median_meth = median(avg_meth,  na.rm = TRUE),
+            .groups     = "drop")
+
+all_grp <- adjS_grp %>%
+  left_join(adjshannons %>% select(annotation, stage_san, lineage_san,
+                                    median_adjH = median_shannon),
+            by = c("annotation", "stage_san", "lineage_san"))
+
+all_grp_meta <- all_grp %>%
+  left_join(meta_grp, by = c("stage_san", "lineage_san"))
+
+saveRDS(
+  list(all_grp      = all_grp,
+       meta_grp     = meta_grp,
+       all_grp_meta = all_grp_meta),
+  file = "argelaguet_groups_meta.rds"
+)
+
+cat("Groups with entropy data:", nrow(all_grp_meta), "\n")
+```
+
+## adjS vs adjH
+
+```{r adjS_vs_adjH, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
+df_cmp <- all_grp_meta %>% filter(!is.na(lineage_class))
+if (nrow(df_cmp) > 0) {
+  ggplot(df_cmp, aes(x = median_adjH, y = median_adjS, color = annotation)) +
+    geom_point(size = 1.5, alpha = 0.8) +
+    scale_color_manual(values = argelaguet_annotation_pal) +
+    facet_grid(. ~ lineage_class) +
+    labs(x = "median jsd", y = expression("median " * i[total]),
+         color = "annotation") +
+    guides(color = guide_legend(override.aes = list(size = 3))) +
+    theme_ng()
+}
+```
+
+<!-- Section dropped: amet has no raw H/S, so the S vs H scatter is not reproduced. -->
+
+# Time course {.tabset .tabset-pills}
+
+Entropy trajectories across developmental stages. Each point is the median for one
+(stage, lineage) group. The gastrulation time series spans E4.5 through E7.5, covering
+the emergence of epiblast, primitive streak, and the three germ layers. Entropy at
+enhancers and active chromatin marks is expected to rise in progenitor states and
+fall upon lineage commitment.
+
+```{r timecourse_data}
+stage_order <- sort(unique(all_grp_meta$stage))
+tc <- all_grp_meta %>%
+  filter(!is.na(lineage_class), !is.na(stage)) %>%
+  mutate(stage = factor(stage, levels = stage_order))
+```
+
+## adjS by stage and lineage class
+
+```{r timecourse_adjS, fig.width = ng_fig_size(length(stage_order), 9)$w, fig.height = ng_fig_size(length(stage_order), 9)$h}
+ggplot(tc, aes(x = stage, y = median_adjS,
+               color = lineage_class, group = interaction(lineage_san, annotation))) +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1.2, alpha = 0.8) +
+  scale_color_manual(values = argelaguet_lineage_class_pal) +
+  facet_wrap(~ annotation, ncol = 3, scales = "free_y") +
+  labs(x = "developmental stage", y = expression("median " * i[total]),
+       color = "lineage class") +
+  guides(color = guide_legend(override.aes = list(size = 2.5, alpha = 1,
+                                                   linewidth = 1))) +
+  theme_ng()
+```
+
+## adjH by stage and lineage class
+
+```{r timecourse_adjH, fig.width = ng_fig_size(length(stage_order), 9)$w, fig.height = ng_fig_size(length(stage_order), 9)$h}
+ggplot(tc, aes(x = stage, y = median_adjH,
+               color = lineage_class, group = interaction(lineage_san, annotation))) +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1.2, alpha = 0.8) +
+  scale_color_manual(values = argelaguet_lineage_class_pal) +
+  facet_wrap(~ annotation, ncol = 3, scales = "free_y") +
+  labs(x = "developmental stage", y = "median jsd",
+       color = "lineage class") +
+  guides(color = guide_legend(override.aes = list(size = 2.5, alpha = 1,
+                                                   linewidth = 1))) +
+  theme_ng()
+```
+
+## Methylation by stage and lineage class
+
+```{r timecourse_meth, fig.width = ng_fig_size(length(stage_order), 9)$w, fig.height = ng_fig_size(length(stage_order), 9)$h}
+ggplot(tc, aes(x = stage, y = median_meth,
+               color = lineage_class, group = interaction(lineage_san, annotation))) +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1.2, alpha = 0.8) +
+  scale_color_manual(values = argelaguet_lineage_class_pal) +
+  facet_wrap(~ annotation, ncol = 3, scales = "free_y") +
+  labs(x = "developmental stage", y = "median avg. methylation",
+       color = "lineage class") +
+  guides(color = guide_legend(override.aes = list(size = 2.5, alpha = 1,
+                                                   linewidth = 1))) +
+  theme_ng()
+```
+
+# Enhancers vs promoters {.tabset .tabset-pills}
+
+Comparing entropy at active enhancer marks (H3K27ac, H3K4me1) against promoter marks
+(H3K4me3, Promoters). The gastrulation paper reports that meso- and endoderm-defining
+enhancers undergo concerted demethylation upon germ-layer specification; adjS at
+these marks captures the heterogeneity of that process. H3K27ac and H3K4me1
+here come from ENCODE bulk mm10 data, not gastrulation-specific ChIP.
+
+```{r enh_vs_prom_data}
+enh_marks  <- c("Enh E7.5 Ect", "Enh E7.5 End", "Enh E7.5 Mes",
+                "Enh E7.5 union", "ESC p300")
+prom_marks <- c("H3K4me3 E7.5 common", "Promoters",
+                "H3K4me3 (ENCODE)")
+
+ep_df <- all_grp_meta %>%
+  filter(annotation %in% c(enh_marks, prom_marks),
+         !is.na(lineage_class)) %>%
+  mutate(
+    mark_type = case_when(
+      annotation %in% enh_marks  ~ "enhancer",
+      annotation %in% prom_marks ~ "promoter"
+    ),
+    stage = factor(stage, levels = stage_order)
+  )
+```
+
+## adjS enhancers vs promoters across stage
+
+```{r enh_vs_prom_adjS, fig.width = ng_fig_size(length(stage_order), 2)$w, fig.height = ng_fig_size(length(stage_order), 2)$h}
+ggplot(ep_df, aes(x = stage, y = median_adjS,
+                   color = lineage_class, shape = mark_type,
+                   group = interaction(lineage_san, annotation))) +
+  geom_line(alpha = 0.4, linewidth = 0.4) +
+  geom_point(size = 1.5, alpha = 0.85) +
+  scale_color_manual(values = argelaguet_lineage_class_pal) +
+  scale_shape_manual(values = mark_type_shapes) +
+  facet_grid(mark_type ~ lineage_class, scales = "free_y") +
+  labs(x = "developmental stage", y = expression("median " * i[total]),
+       color = "lineage class", shape = "mark type") +
+  guides(
+    color = guide_legend(override.aes = list(size = 2.5, alpha = 1, linewidth = 1)),
+    shape = guide_legend(override.aes = list(size = 2.5))
+  ) +
+  theme_ng()
+```
+
+## adjH enhancers vs promoters across stage
+
+```{r enh_vs_prom_adjH, fig.width = ng_fig_size(length(stage_order), 2)$w, fig.height = ng_fig_size(length(stage_order), 2)$h}
+ggplot(ep_df, aes(x = stage, y = median_adjH,
+                   color = lineage_class, shape = mark_type,
+                   group = interaction(lineage_san, annotation))) +
+  geom_line(alpha = 0.4, linewidth = 0.4) +
+  geom_point(size = 1.5, alpha = 0.85) +
+  scale_color_manual(values = argelaguet_lineage_class_pal) +
+  scale_shape_manual(values = mark_type_shapes) +
+  facet_grid(mark_type ~ lineage_class, scales = "free_y") +
+  labs(x = "developmental stage", y = "median jsd",
+       color = "lineage class", shape = "mark type") +
+  guides(
+    color = guide_legend(override.aes = list(size = 2.5, alpha = 1, linewidth = 1)),
+    shape = guide_legend(override.aes = list(size = 2.5))
+  ) +
+  theme_ng()
+```
+
+## Paired scatter: adjS enhancer vs adjS promoter
+
+Each point is one (stage, lineage) group. Groups above the diagonal have higher
+within-cell entropy at enhancers than at promoters.
+
+```{r enh_prom_scatter, fig.width = ng_fig_size(2, 2)$w, fig.height = ng_fig_size(2, 2)$h}
+ep_wide <- all_grp_meta %>%
+  filter(annotation %in% c("Enh E7.5 union", "Promoters"),
+         !is.na(lineage_class)) %>%
+  select(stage_san, lineage_san, lineage_class, stage, annotation, median_adjS) %>%
+  pivot_wider(names_from = annotation, values_from = median_adjS) %>%
+  rename(adjS_enh = `Enh E7.5 union`, adjS_prom = Promoters) %>%
+  mutate(stage = factor(stage, levels = stage_order))
+
+if (all(c("adjS_enh", "adjS_prom") %in% names(ep_wide))) {
+  ggplot(ep_wide, aes(x = adjS_prom, y = adjS_enh,
+                       color = lineage_class, shape = stage)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed",
+                color = "grey60", linewidth = 0.4) +
+    geom_point(size = 2, alpha = 0.8) +
+    scale_color_manual(values = argelaguet_lineage_class_pal) +
+    scale_shape_manual(values = seq_along(levels(ep_wide$stage))) +
+    labs(x = expression("median " * i[total] * " at promoters"),
+         y = expression("median " * i[total] * " at E7.5 enhancers (union)"),
+         color = "lineage class", shape = "stage") +
+    guides(
+      color = guide_legend(override.aes = list(size = 3)),
+      shape = guide_legend(override.aes = list(size = 3))
+    ) +
+    theme_ng()
+}
+```
+
+# Variation across lineages {.tabset .tabset-pills}
+
+SD and range of group medians per annotation, broken down by lineage class.
+
+```{r variation_helpers}
+safe_range <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) < 2) return(NA_real_)
+  diff(range(x))
+}
+```
+
+```{r variation_lineage, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
+var_lineage <- all_grp_meta %>%
+  filter(!is.na(lineage_class)) %>%
+  group_by(annotation, lineage_class) %>%
+  summarise(
+    adjS_sd    = sd(median_adjS, na.rm = TRUE),
+    adjH_sd    = sd(median_adjH, na.rm = TRUE),
+    adjS_range = safe_range(median_adjS),
+    adjH_range = safe_range(median_adjH),
+    .groups = "drop"
+  )
+
+if (any(!is.na(var_lineage$adjH_sd))) {
+  ggplot(var_lineage, aes(x = adjH_sd, y = adjS_sd,
+                           color = annotation, label = annotation)) +
+    geom_point(size = 3) +
+    geom_text_repel(size = 3) +
+    scale_color_manual(values = argelaguet_annotation_pal) +
+    facet_grid(. ~ lineage_class) +
+    labs(x = "SD of jsd across groups",
+         y = expression("SD of " * i[total] * " across groups")) +
+    theme_ng()
+}
+```
+
+# Driver categorization
+
+For each annotation, we compute the SD of group-level median adjH (across-cell
+heterogeneity) and median adjS (within-cell heterogeneity) across all
+(stage, lineage) groups. If one SD is at least 1.5x the other, that entropy
+component dominates. Annotations where both SDs fall below the 30th percentile
+are labelled "neither".
+
+```{r drivers, fig.width = ng_fig_size(3, 3)$w, fig.height = ng_fig_size(3, 3)$h}
+driver_df <- categorize_drivers(all_grp_meta, "lineage_class")
+
+cat("Driver table:\n")
+print(table(driver_df$driver))
+
+plot_driver_scatter(driver_df,
+                    x_label = "SD of jsd across lineage class groups",
+                    y_label = expression("SD of " * i[total] * " across lineage class groups"))
+```
+
+# Heatmaps {.tabset .tabset-pills}
+
+Rows = lineage (clustered). Columns = annotation. Row bars show lineage class.
+
+```{r heatmap_helpers}
+make_heatmap <- function(df, value_col, title,
+                          palette = c("navy", "white", "firebrick")) {
+  wide <- df %>%
+    select(lineage, annotation, lineage_class,
+           value = all_of(value_col)) %>%
+    filter(!is.na(lineage_class)) %>%
+    group_by(lineage, annotation, lineage_class) %>%
+    summarise(value = median(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = annotation, values_from = value)
+
+  if (nrow(wide) < 2) {
+    message("Too few rows for heatmap")
+    return(invisible(NULL))
+  }
+
+  mat <- wide %>% select(-lineage, -lineage_class) %>% as.matrix()
+  rownames(mat) <- wide$lineage
+
+  ## Drop rows / columns that are entirely NA so hclust gets a finite distance.
+  keep_rows <- rowSums(!is.na(mat)) >= 2
+  keep_cols <- colSums(!is.na(mat)) >= 2
+  mat  <- mat[keep_rows, keep_cols, drop = FALSE]
+  wide <- wide[keep_rows, , drop = FALSE]
+
+  if (nrow(mat) < 2 || ncol(mat) < 2) {
+    message("Skipping heatmap: not enough non-NA rows/cols")
+    return(invisible(NULL))
+  }
+
+  breaks <- c(min(mat, na.rm = TRUE),
+              mean(range(mat, na.rm = TRUE)),
+              max(mat, na.rm = TRUE))
+  if (any(!is.finite(breaks)) || breaks[1] == breaks[3]) {
+    message("Skipping heatmap: degenerate data (all-NA or constant matrix)")
+    return(invisible(NULL))
+  }
+
+  row_ann <- rowAnnotation(
+    lineage_class = wide$lineage_class,
+    col = list(lineage_class = argelaguet_lineage_class_pal),
+    annotation_legend_param = list(
+      lineage_class = list(title = "lineage class")
+    )
+  )
+
+  col_fun <- colorRamp2(breaks, palette)
+
+  Heatmap(mat,
+          name              = title,
+          col               = col_fun,
+          row_split         = wide$lineage_class,
+          cluster_rows      = TRUE,
+          cluster_columns   = FALSE,
+          show_row_names    = TRUE,
+          show_column_names = TRUE,
+          row_names_gp      = gpar(fontsize = 7),
+          right_annotation  = row_ann,
+          column_title      = title,
+          na_col            = "grey90")
+}
+```
+
+## adjS
+
+```{r heatmap_adjS, fig.width = 10, fig.height = 8}
+heat_df_adjs <- adjsampens %>%
+  group_by(annotation, stage_san, lineage_san, lineage, lineage_class) %>%
+  summarise(median_adjS = median(sampen, na.rm = TRUE), .groups = "drop")
+
+make_heatmap(heat_df_adjs, "median_adjS", "median i_total",
+             palette = c("navy", "white", "firebrick"))
+```
+
+## adjH
+
+```{r heatmap_adjH, fig.width = 10, fig.height = 8}
+heat_df_adjh <- adjshannons %>%
+  group_by(annotation, stage_san, lineage_san, lineage, lineage_class) %>%
+  summarise(median_adjH = median(median_shannon, na.rm = TRUE), .groups = "drop")
+
+make_heatmap(heat_df_adjh, "median_adjH", "median jsd",
+             palette = c("navy", "white", "firebrick"))
+```
+
+<!-- Section dropped: amet ships no paper-MOFA UMAP overlay; revisit if amet ever wires that external file in. -->
+
+# Cell-level UMAP {.tabset .tabset-pills}
+
+```{r umap_helpers}
+
+plot_umap <- function(df, color_col, title, subtitle = NULL) {
+  if (is.null(df) || nrow(df) == 0) {
+    message("No UMAP result for: ", title)
+    return(invisible(NULL))
+  }
+  ggplot(df %>% filter(!is.na(.data[[color_col]])),
+         aes(x = UMAP1, y = UMAP2, color = .data[[color_col]])) +
+    geom_point(size = 1.5, alpha = 0.7) +
+    scale_color_viridis_d(option = "turbo", begin = 0.05, end = 0.95) +
+    labs(title = title, subtitle = subtitle,
+         color = color_col) +
+    guides(color = guide_legend(override.aes = list(size = 3))) +
+    theme_ng()
+}
+```
+
+```{r cell_umap_load}
+## Build a wide cells x annotation matrix from amet's per-cell-per-feature
+## i_total.
+cells_adjS_long <- as.data.frame(feat_cf)[, c("cell_id", "stage_san",
+                                               "lineage_san", "annotation",
+                                               "i_total")] %>%
+  rename(value = i_total) %>%
+  group_by(cell_id, stage_san, lineage_san, annotation) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+cells_adjS_long$annotation <- factor(cells_adjS_long$annotation,
+                                      levels = names(ann_labels),
+                                      labels = unname(ann_labels))
+
+cells_meth_long <- as.data.frame(feat_cf)[, c("cell_id", "stage_san",
+                                               "lineage_san", "annotation",
+                                               "mean_meth")] %>%
+  rename(value = mean_meth) %>%
+  group_by(cell_id, stage_san, lineage_san, annotation) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+cells_meth_long$annotation <- factor(cells_meth_long$annotation,
+                                      levels = names(ann_labels),
+                                      labels = unname(ann_labels))
+
+meta_cols_cell <- c("stage_san", "lineage_san", "cell_id",
+                    "stage", "lineage", "lineage_class")
+
+cells_adjS_wide <- pivot_wider(cells_adjS_long,
+                                id_cols    = c(cell_id, stage_san, lineage_san),
+                                names_from = annotation,
+                                values_from = value) %>%
+  left_join(meta_grp %>% select(stage_san, lineage_san, stage, lineage,
+                                 lineage_class),
+            by = c("stage_san", "lineage_san"))
+
+cells_meth_wide <- pivot_wider(cells_meth_long,
+                                id_cols    = c(cell_id, stage_san, lineage_san),
+                                names_from = annotation,
+                                values_from = value) %>%
+  left_join(meta_grp %>% select(stage_san, lineage_san, stage, lineage,
+                                 lineage_class),
+            by = c("stage_san", "lineage_san"))
+
+saveRDS(list(cells_adjS_wide = cells_adjS_wide,
+             cells_meth_wide = cells_meth_wide),
+        "argelaguet_cell_matrices.rds")
+```
+
+## Cell-level: adjS across annotations
+
+```{r cell_umap_adjS, fig.width = ng_fig_size(2, 2)$w, fig.height = ng_fig_size(2, 2)$h}
+umap_cell_adjS <- run_umap_wide(cells_adjS_wide, meta_cols_cell,
+                                 n_neighbors = 15L)
+saveRDS(umap_cell_adjS, "argelaguet_umap_cell_i_total.rds")
+
+plot_umap(umap_cell_adjS, "lineage_class",
+          title    = "Cell-level UMAP - i_total features",
+          subtitle = "per-cell i_total per annotation as feature vector")
+```
+
+## Cell-level: adjS colored by stage
+
+```{r cell_umap_adjS_stage, fig.width = ng_fig_size(2, 2)$w, fig.height = ng_fig_size(2, 2)$h}
+plot_umap(umap_cell_adjS, "stage",
+          title    = "Cell-level UMAP - i_total features",
+          subtitle = "colored by developmental stage")
+```
+
+## Cell-level: avg methylation across annotations
+
+```{r cell_umap_meth, fig.width = ng_fig_size(2, 2)$w, fig.height = ng_fig_size(2, 2)$h}
+umap_cell_meth <- run_umap_wide(cells_meth_wide, meta_cols_cell,
+                                 n_neighbors = 15L)
+saveRDS(umap_cell_meth, "argelaguet_umap_cell_meth.rds")
+
+plot_umap(umap_cell_meth, "lineage_class",
+          title    = "Cell-level UMAP - avg. methylation features",
+          subtitle = "per-cell avg. methylation per annotation as feature vector")
+```
+
+<!-- Section dropped: amet has no raw S, so the S-with-meth-regressed-out UMAP is not reproduced. -->
+
+## Group-level: adjH across annotations
+
+```{r group_umap_adjH, fig.width = ng_fig_size(2, 2)$w, fig.height = ng_fig_size(2, 2)$h}
+adjH_wide_grp <- all_grp_meta %>%
+  filter(!is.na(lineage_class)) %>%
+  select(stage_san, lineage_san, stage, lineage, lineage_class,
+         annotation, median_adjH) %>%
+  pivot_wider(names_from = annotation, values_from = median_adjH)
+
+umap_grp_adjH <- run_umap_wide(
+  adjH_wide_grp,
+  meta_cols   = c("stage_san", "lineage_san", "stage", "lineage", "lineage_class"),
+  n_neighbors = 5L
+)
+saveRDS(umap_grp_adjH, "argelaguet_umap_grp_jsd.rds")
+
+plot_umap(umap_grp_adjH, "lineage_class",
+          title    = "Group-level UMAP - jsd features",
+          subtitle = "median jsd per annotation as feature vector")
+```
+
+```{r group_umap_adjH_stage, fig.width = ng_fig_size(2, 2)$w, fig.height = ng_fig_size(2, 2)$h}
+plot_umap(umap_grp_adjH, "stage",
+          title    = "Group-level UMAP - jsd features",
+          subtitle = "colored by developmental stage")
+```
+
+<!-- Section dropped: per-annotation locus-level UMAP from .norm.det.out.gz is not reproduced. amet does not export per-locus jsd vectors per group; only per-feature jsd is available, which is already plotted above. -->

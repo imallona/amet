@@ -6,12 +6,17 @@
 
 prototype:
   enabled: true
-  cells_per_group: 10
+  cells_per_group: 10           # enough cells per group for cell-level PCA/UMAP and clustered heatmaps
   features_subset: 200          # take first N intervals of each feature BED
 
 barbara:
   host: barbara
   user: imallona
+
+## Read-only data paths can be overridden to point directly at an existing
+## tree on barbara, skipping any sync/symlink. Defaults below (empty strings)
+## make the smk rules fall back to <results>/<dataset>/<subdir>, the local
+## layout populated by sync_from_barbara.sh.
 
 argelaguet:
   run_name: argelaguet_proto
@@ -19,8 +24,17 @@ argelaguet:
   meta_remote: /home/imallona/src/yamet/workflow/argelaguet/sample_metadata.txt
   cpg_level_remote: /home/imallona/src/yamet/workflow/argelaguet/met/cpg_level
   features_remote: /home/imallona/src/yamet/workflow/argelaguet/features/genomic_contexts
+  ## Read-only path overrides. Set on barbara to point at an existing tree:
+  ##   metadata_path: <data-root>/argelaguet/sample_metadata.txt
+  ##   cells_dir:     <data-root>/argelaguet/met/cpg_level
+  ##   features_dir:  <data-root>/argelaguet/features/genomic_contexts
+  ##   mm10_dir:      <data-root>/mm10
+  metadata_path: ""
+  cells_dir: ""
+  features_dir: ""
+  mm10_dir: ""
   assembly: mm10
-  window_size: 100000
+  window_size: 500000
   proto_lineages:
     - Epiblast
     - Primitive_endoderm
@@ -28,24 +42,41 @@ argelaguet:
     - Rostral_neurectoderm
 
 ecker:
+  run_name: ecker_proto
   group_column: sub_type
   raw_remote: /home/imallona/src/yamet/workflow/data/brain/raw
   meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
+  nemo_meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/MOp_Metadata.tsv.gz
+  ## Read-only path overrides. Set on barbara to:
+  ##   raw_dir:        <data-root>/data/brain/raw
+  ##   xlsx_path:      <data-root>/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
+  ##   nemo_meta_path: <data-root>/data/brain/raw/MOp_Metadata.tsv.gz
+  raw_dir: ""
+  xlsx_path: ""
+  nemo_meta_path: ""
   assembly: mm10
+  window_size: 10000
   region_filter: MOp
+  ## sub_type names follow the Liu 2021 supplement convention (space-separated,
+  ## e.g. "IT-L23 Cux1"). Picked from the alphabetic-first slice that
+  ## sync_from_barbara.sh pulls.
   proto_cell_types:
-    - L23-IT
-    - L5-IT
-    - ASC-mid
-    - CGE-Vip-Ccser1
+    - "IT-L23 Cux1"
+    - "IT-L4 Shc3"
 
 crc:
+  run_name: crc_proto
   group_column: location
   raw_remote: /home/imallona/src/yamet/workflow/data/crc/raw
+  ## Read-only path overrides. Set on barbara to:
+  ##   raw_dir: <data-root>/data/crc/raw
+  ##   hg19_dir: <data-root>/hg19
+  raw_dir: ""
+  hg19_dir: ""
   assembly: hg19
+  window_size: 10000
   proto_patients:
     - CRC01
-    - CRC02
   proto_locations:
     - NC
     - PT
@@ -54,8 +85,8 @@ crc:
 amet:
   i_max_lag: 3
   min_cpgs_per_feature: 5
-  # prototype scope: lowered to 3 because chr19+200-feature subset gives
-  # at most a handful of covered cells per (peak, group). Set back to 10
-  # (or higher) for the full-scale run.
-  min_cells_per_group: 3
+  # Lower bound on cells per stratum before amet emits jsd. Set low so
+  # prototype runs with sparse strata still produce JSD rows; raise to 10+
+  # for the full run if you want to suppress noisy small-group estimates.
+  min_cells_per_group: 2
   meth_call_threshold: 0.1

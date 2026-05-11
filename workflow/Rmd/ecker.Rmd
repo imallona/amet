@@ -1,0 +1,620 @@
+---
+title: "Ecker 2021 mouse brain: methylation entropy by feature (CpG context)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+author: "Izaskun Mallona"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+    number_sections: true
+    df_print: default
+    theme: lumen
+params:
+  features_dir: ""
+  win_cell_feature: ""
+  win_feature: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(data.table)
+  library(readr)
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(BiocParallel)
+  library(ggrepel)
+  library(ggridges)
+  library(ComplexHeatmap)
+  library(circlize)
+  library(uwot)
+  library(irlba)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+source(file.path(repo_root, "workflow", "scripts", "embedding_utils.R"))
+source(file.path(repo_root, "workflow", "scripts", "driver_utils.R"))
+param <- SerialParam()
+```
+
+```{r opts}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  fig.width  = 5,
+  fig.height = 5,
+  cache      = FALSE,
+  include    = TRUE,
+  fig.path   = "ecker_plots/",
+  dev        = c("png", "svg"),
+  dpi        = 500,
+  cache.lazy = FALSE,
+  warning    = TRUE,
+  message    = TRUE
+)
+```
+
+Mouse (mm10), CpG context only.
+
+```{r helpers}
+## filenames: {annotation}_{sub_region}_{sub_type}.*.gz
+## annotation has no underscores; neither do sub_region or sub_type values
+get_annotation <- function(fn) sub("^(.*)_[^_]+_[^_]+\\..*$", "\\1", fn)
+get_sub_region <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$", "\\1", fn)
+get_sub_type   <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",   "\\1", fn)
+
+ann_labels <- c(
+  "genes"    = "Genes",
+  "promoters"= "Promoters",
+  "lines"    = "LINEs",
+  "sines"    = "SINEs",
+  "h3k4me3"  = "H3K4me3",
+  "h3k9me3"  = "H3K9me3",
+  "h3k27me3" = "H3K27me3",
+  "h3k4me1"  = "H3K4me1",
+  "h3k27ac"  = "H3K27ac"
+)
+
+harmonize_levels <- function(df) {
+  missing_ann <- setdiff(unique(df$annotation), names(ann_labels))
+  if (length(missing_ann) > 0)
+    warning("unknown annotations: ", paste(missing_ann, collapse = ", "))
+  df$annotation <- factor(df$annotation,
+                           levels = names(ann_labels),
+                           labels = unname(ann_labels))
+  if ("sub_region" %in% names(df)) df$sub_region <- factor(df$sub_region)
+  if ("sub_type"   %in% names(df)) df$sub_type   <- factor(df$sub_type)
+  df
+}
+
+## _sanitize for Ecker: gsub(" ", "-", x).
+sanitize <- function(x) gsub(" ", "-", x)
+```
+
+```{r load_metadata_early}
+## Load cell-level metadata early so cell_class / major_type are available
+## in all data-loading chunks below. amet's manifest carries sub_region,
+## sub_type, cell_class, major_type per cell (see make_manifest_ecker.py).
+man <- fread(params$manifest)
+meta_cells <- as.data.frame(man) %>%
+  mutate(
+    sub_region = sanitize(as.character(sub_region)),
+    sub_type   = sanitize(as.character(sub_type))
+  )
+
+meta_grp <- meta_cells %>%
+  group_by(sub_region, sub_type) %>%
+  summarise(
+    cell_class = if ("cell_class" %in% names(meta_cells))
+                   first(na.omit(cell_class)) else NA_character_,
+    major_type = if ("major_type" %in% names(meta_cells))
+                   first(na.omit(major_type)) else NA_character_,
+    n_meta     = n(),
+    .groups    = "drop"
+  )
+
+cat("meta_grp rows:", nrow(meta_grp), "\n")
+cat("cell_class levels:", paste(sort(unique(meta_grp$cell_class)), collapse = ", "), "\n")
+```
+
+```{r load_amet}
+## amet emits one TSV pair per (annotation, sub_region, sub_type) stratum.
+## Enumerate, parse the wildcard values from filenames, concatenate.
+features_dir <- params$features_dir
+cf_files <- list.files(features_dir,
+                       pattern = "\\.cell_feature\\.tsv\\.gz$",
+                       full.names = TRUE)
+fe_files <- list.files(features_dir,
+                       pattern = "\\.feature\\.tsv\\.gz$",
+                       full.names = TRUE)
+fe_files <- fe_files[!grepl("\\.cell_feature\\.tsv\\.gz$", fe_files)]
+
+## Aggregate per cell at read time so feat_cf collapses from O(cells *
+## features * strata * annotations) rows to O(cells * strata * annotations).
+## Every downstream plot/embedding averages over features per cell.
+read_combo_cf <- function(fp) {
+  fn <- basename(fp)
+  base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
+  bx <- paste0(base, ".x")
+  dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
+  agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
+                i_total = mean(i_total, na.rm = TRUE)),
+            by = cell_id]
+  agg[, annotation := get_annotation(bx)]
+  agg[, sub_region := get_sub_region(bx)]
+  agg[, sub_type   := get_sub_type(bx)]
+  agg
+}
+
+read_combo_fe <- function(fp) {
+  fn <- basename(fp)
+  base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
+  bx <- paste0(base, ".x")
+  dt <- fread(fp)
+  dt[, annotation := get_annotation(bx)]
+  dt[, sub_region := get_sub_region(bx)]
+  dt[, sub_type   := get_sub_type(bx)]
+  dt
+}
+
+feat_cf <- rbindlist(lapply(cf_files, read_combo_cf), fill = TRUE)
+feat_fe <- rbindlist(lapply(fe_files, read_combo_fe), fill = TRUE)
+
+cat("loaded", length(cf_files), "cell_feature TSVs and",
+    length(fe_files), "feature TSVs from", features_dir, "\n")
+
+## Attach cell_class / major_type per stratum (one row per
+## (sub_region, sub_type), not per cell). Update by reference.
+meta_grp_dt <- as.data.table(meta_grp)[, .(sub_region, sub_type,
+                                            cell_class, major_type)]
+feat_cf[meta_grp_dt, on = .(sub_region, sub_type),
+        `:=`(cell_class = i.cell_class, major_type = i.major_type)]
+```
+
+<!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue, so the S sample-entropy block (import_sampen, scatter_sampen, violin_sampen, ridges_sampen) is not reproduced. -->
+
+# adjS - methylation-adjusted sample entropy {.tabset .tabset-pills}
+
+Per-cell normalised sample entropy from amet's per-cell-per-feature output
+(amet `i_total`, the within-cell mutual-information score).
+
+```{r import_adjS}
+adjsampens <- as.data.frame(feat_cf)
+adjsampens$sampen   <- adjsampens$i_total
+adjsampens$avg_meth <- adjsampens$mean_meth
+adjsampens <- harmonize_levels(adjsampens)
+head(adjsampens)
+```
+
+## Entropy vs methylation
+
+```{r scatter_adjS, fig.width = 10, fig.height = 15}
+ggplot(adjsampens %>% filter(!is.na(cell_class)),
+       aes(x = avg_meth, y = sampen, color = major_type)) +
+  geom_point(size = 0.4, alpha = 0.15) +
+  scale_color_manual(values = ecker_major_type_pal, na.value = "grey70") +
+  facet_grid(annotation ~ cell_class) +
+  labs(x = "average methylation", y = expression(i[total]), color = "cell type") +
+  guides(color = guide_legend(override.aes = list(size = 2.5, alpha = 1))) +
+  theme_ng()
+```
+
+## Distributions
+
+```{r violin_adjS, fig.width = 10, fig.height = 15}
+ggplot(adjsampens %>% filter(!is.na(cell_class)),
+       aes(x = major_type, y = sampen, fill = major_type)) +
+  geom_violin(alpha = 0.5, draw_quantiles = 0.5) +
+  scale_fill_manual(values = ecker_major_type_pal) +
+  facet_grid(annotation ~ cell_class, scales = "free_y") +
+  labs(y = expression(i[total]), fill = "cell type") +
+  theme_ng() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+
+```{r ridges_adjS, fig.width = 10, fig.height = 15}
+ggplot(adjsampens %>% filter(!is.na(cell_class)),
+       aes(x = sampen, y = major_type, fill = major_type)) +
+  geom_density_ridges(alpha = 0.6, scale = 0.85) +
+  scale_fill_manual(values = ecker_major_type_pal) +
+  facet_grid(annotation ~ cell_class, scales = "free") +
+  labs(x = expression(i[total])) +
+  theme_ng() +
+  theme(legend.position = "none")
+```
+
+<!-- Section dropped: amet ships only methylation-stable jsd, no raw Shannon entropy analogue, so the H Shannon-entropy median block (import_shannon, scatter_shannon) is not reproduced. -->
+
+# adjH (methylation-normalised Shannon entropy) - medians {.tabset .tabset-pills}
+
+Per-feature jsd from amet's feature TSV (amet `jsd`, the multi-distribution
+Jensen-Shannon divergence across cells in a group).
+
+```{r import_adjH}
+## Aggregate amet's per-feature jsd to one median per (annotation,
+## sub_region, sub_type) so the downstream group_medians join doesn't explode.
+adjshannons <- as.data.frame(
+  as.data.table(feat_fe)[
+    , .(median_shannon  = median(jsd, na.rm = TRUE),
+        median_avg_meth = median(mean_meth_mean, na.rm = TRUE)),
+    by = .(annotation, sub_region, sub_type)
+  ]
+)
+adjshannons <- harmonize_levels(adjshannons)
+adjshannons <- adjshannons %>%
+  left_join(meta_grp %>% select(sub_region, sub_type, cell_class, major_type),
+            by = c("sub_region", "sub_type"))
+head(adjshannons)
+```
+
+## Median adjH vs methylation
+
+```{r scatter_adjH, fig.width = 10, fig.height = 15}
+ggplot(adjshannons %>% filter(!is.na(cell_class)),
+       aes(x = median_avg_meth, y = median_shannon, color = major_type)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_manual(values = ecker_major_type_pal, na.value = "grey70") +
+  facet_grid(annotation ~ cell_class) +
+  labs(x = "median avg. methylation", y = "median jsd", color = "cell type") +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme_ng()
+```
+
+# Assembly
+
+adjS (i_total) is per-cell. adjH (jsd) is per-feature per-group.
+
+```{r str_check}
+str(adjsampens)
+str(adjshannons)
+```
+
+```{r save_rds}
+saveRDS(
+  list(adjsampens  = adjsampens,
+       adjshannons = adjshannons),
+  file = "ecker_entropy.rds"
+)
+```
+
+Aggregate per-cell adjS to per-group medians so it is comparable to adjH.
+
+```{r group_medians}
+adjS_grp <- adjsampens %>%
+  group_by(annotation, sub_region, sub_type) %>%
+  summarise(median_adjS = median(sampen,    na.rm = TRUE),
+            median_meth = median(avg_meth, na.rm = TRUE),
+            .groups = "drop")
+
+all_grp <- adjS_grp %>%
+  left_join(adjshannons %>% select(annotation, sub_region, sub_type,
+                                    median_adjH = median_shannon),
+            by = c("annotation", "sub_region", "sub_type"))
+
+head(all_grp)
+```
+
+```{r load_metadata}
+## Attach CellClass / MajorType to the group-level table.
+all_grp_meta <- all_grp %>%
+  mutate(sub_region = as.character(sub_region),
+         sub_type   = as.character(sub_type)) %>%
+  left_join(meta_grp, by = c("sub_region", "sub_type"))
+
+saveRDS(
+  list(all_grp      = all_grp,
+       meta_grp     = meta_grp,
+       all_grp_meta = all_grp_meta,
+       meta_cells   = meta_cells),
+  file = "ecker_groups_meta.rds"
+)
+
+cat("all_grp_meta rows:", nrow(all_grp_meta), "\n")
+cat("cell_class non-NA:", sum(!is.na(all_grp_meta$cell_class)), "\n")
+cat("median_adjH non-NA:", sum(!is.na(all_grp_meta$median_adjH)), "\n")
+```
+
+## adjS vs adjH
+
+```{r adjS_vs_adjH, fig.width = 13, fig.height = 4}
+df_cmp <- all_grp_meta %>% filter(!is.na(cell_class))
+if (nrow(df_cmp) > 0) {
+  ggplot(df_cmp, aes(x = median_adjH, y = median_adjS, color = annotation)) +
+    geom_point(size = 1.5, alpha = 0.8) +
+    scale_color_manual(values = ecker_annotation_pal) +
+    facet_grid(. ~ cell_class) +
+    labs(x = "median jsd", y = expression("median " * i[total]),
+         color = "annotation") +
+    guides(color = guide_legend(override.aes = list(size = 3))) +
+    theme_ng()
+} else {
+  message("No data with cell_class assigned - check metadata join")
+}
+```
+
+<!-- Section dropped: amet has no raw S/H, so the S vs H scatter is not reproduced. -->
+
+# Variation across cell types {.tabset .tabset-pills}
+
+SD and range of group medians per annotation, broken down by cell class.
+
+```{r variation_helpers}
+safe_range <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) < 2) return(NA_real_)
+  diff(range(x))
+}
+```
+
+```{r variation_class, fig.width = 13, fig.height = 4}
+var_class <- all_grp_meta %>%
+  filter(!is.na(cell_class)) %>%
+  group_by(annotation, cell_class) %>%
+  summarise(
+    adjS_sd    = sd(median_adjS, na.rm = TRUE),
+    adjH_sd    = sd(median_adjH, na.rm = TRUE),
+    adjS_range = safe_range(median_adjS),
+    adjH_range = safe_range(median_adjH),
+    .groups = "drop"
+  )
+
+if (nrow(var_class) > 0 && any(!is.na(var_class$adjH_sd))) {
+  ggplot(var_class, aes(x = adjH_sd, y = adjS_sd,
+                         color = annotation, label = annotation)) +
+    geom_point(size = 3) +
+    geom_text_repel(size = 3) +
+    scale_color_manual(values = ecker_annotation_pal) +
+    facet_grid(. ~ cell_class) +
+    labs(x = "SD of jsd across cell sub-types",
+         y = expression("SD of " * i[total] * " across cell sub-types")) +
+    theme_ng()
+} else {
+  message("No variation data available")
+}
+```
+
+# Driver categorization
+
+For each annotation, we compute the SD of group-level median adjH (across-cell
+heterogeneity) and median adjS (within-cell heterogeneity) across all
+(sub_region, sub_type) groups. If one SD is at least 1.5x the other, that entropy
+component dominates. Annotations where both SDs fall below the 30th percentile
+are labelled "neither".
+
+```{r drivers, fig.width = 5, fig.height = 5}
+driver_df <- categorize_drivers(all_grp_meta, "cell_class")
+
+cat("Driver table:\n")
+print(table(driver_df$driver))
+
+plot_driver_scatter(driver_df,
+                    x_label = "SD of jsd across cell class groups",
+                    y_label = expression("SD of " * i[total] * " across cell class groups"))
+```
+
+# Heatmaps of median entropy per group {.tabset .tabset-pills}
+
+Rows = sub-type (clustered). Columns = annotation. Row annotation bars show cell class and major type.
+
+```{r heatmap_helpers}
+make_heatmap <- function(df, value_col, title,
+                          palette = c("navy", "white", "firebrick")) {
+  ## wide matrix: rows = sub_type, cols = annotation
+  wide <- df %>%
+    select(sub_type, annotation, cell_class, major_type,
+           value = all_of(value_col)) %>%
+    filter(!is.na(cell_class)) %>%
+    group_by(sub_type, annotation, cell_class, major_type) %>%
+    summarise(value = median(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = annotation, values_from = value)
+
+  if (nrow(wide) < 2) { message("Too few rows for heatmap"); return(invisible(NULL)) }
+
+  mat <- wide %>% select(-sub_type, -cell_class, -major_type) %>% as.matrix()
+  rownames(mat) <- wide$sub_type
+
+  ## row annotations
+  row_ann <- rowAnnotation(
+    cell_class = wide$cell_class,
+    major_type = wide$major_type,
+    col = list(cell_class = ecker_cell_class_pal, major_type = ecker_major_type_pal),
+    annotation_legend_param = list(
+      cell_class = list(title = "cell class"),
+      major_type = list(title = "major type")
+    )
+  )
+
+  col_fun <- colorRamp2(
+    c(min(mat, na.rm = TRUE),
+      mean(range(mat, na.rm = TRUE)),
+      max(mat, na.rm = TRUE)),
+    palette
+  )
+
+  Heatmap(mat,
+          name            = title,
+          col             = col_fun,
+          row_split       = wide$cell_class,
+          cluster_rows    = TRUE,
+          cluster_columns = FALSE,
+          show_row_names  = TRUE,
+          show_column_names = TRUE,
+          row_names_gp    = gpar(fontsize = 7),
+          right_annotation = row_ann,
+          column_title    = title,
+          na_col          = "grey90")
+}
+```
+
+## adjS
+
+```{r heatmap_adjS, fig.width = 10, fig.height = 8}
+heat_df_adjs <- adjsampens %>%
+  group_by(annotation, sub_region, sub_type, cell_class, major_type) %>%
+  summarise(median_adjS = median(sampen, na.rm = TRUE), .groups = "drop")
+
+make_heatmap(heat_df_adjs, "median_adjS", "median i_total",
+             palette = c("navy", "white", "firebrick"))
+```
+
+## adjH
+
+```{r heatmap_adjH, fig.width = 10, fig.height = 8}
+heat_df_adjh <- adjshannons %>%
+  group_by(annotation, sub_region, sub_type, cell_class, major_type) %>%
+  summarise(median_adjH = median(median_shannon, na.rm = TRUE), .groups = "drop")
+
+make_heatmap(heat_df_adjh, "median_adjH", "median jsd",
+             palette = c("navy", "white", "firebrick"))
+```
+
+<!-- Section dropped: amet has no raw S, so the median S heatmap is not reproduced. -->
+
+<!-- Section dropped: amet does not export per-locus entropy vectors per group, so the locus-level H distributions block is not reproduced. Per-feature jsd is already plotted above. -->
+
+# UMAP: cell-type separability {.tabset .tabset-pills}
+
+```{r umap_helpers}
+plot_umap_class <- function(df, title, subtitle = NULL) {
+  if (is.null(df) || nrow(df) == 0) {
+    message("No UMAP result for: ", title)
+    return(invisible(NULL))
+  }
+  if (all(is.na(df$cell_class))) {
+    message("All cell_class values NA in UMAP for: ", title,
+            " - check metadata join")
+    return(invisible(NULL))
+  }
+  ggplot(df %>% filter(!is.na(cell_class)),
+         aes(x = UMAP1, y = UMAP2, color = cell_class)) +
+    geom_point(size = 2, alpha = 0.8) +
+    scale_color_manual(values = ecker_cell_class_pal) +
+    labs(title = title, subtitle = subtitle, color = "cell class") +
+    guides(color = guide_legend(override.aes = list(size = 3))) +
+    theme_ng()
+}
+```
+
+## Cell-level: adjS across annotations
+
+```{r cell_umap_load}
+## Build a wide cells x annotation matrix from amet's per-cell-per-feature
+## i_total.
+cells_adjS_long <- as.data.frame(feat_cf)[, c("cell_id", "sub_region",
+                                               "sub_type", "annotation",
+                                               "i_total")] %>%
+  rename(value = i_total) %>%
+  group_by(cell_id, sub_region, sub_type, annotation) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+cells_adjS_long$annotation <- factor(cells_adjS_long$annotation,
+                                      levels = names(ann_labels),
+                                      labels = unname(ann_labels))
+
+cells_meth_long <- as.data.frame(feat_cf)[, c("cell_id", "sub_region",
+                                               "sub_type", "annotation",
+                                               "mean_meth")] %>%
+  rename(value = mean_meth) %>%
+  group_by(cell_id, sub_region, sub_type, annotation) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+cells_meth_long$annotation <- factor(cells_meth_long$annotation,
+                                      levels = names(ann_labels),
+                                      labels = unname(ann_labels))
+
+cells_adjS_wide <- pivot_wider(cells_adjS_long,
+                                id_cols     = c(cell_id, sub_region, sub_type),
+                                names_from  = annotation,
+                                values_from = value) %>%
+  left_join(meta_grp %>% select(sub_region, sub_type, cell_class, major_type),
+            by = c("sub_region", "sub_type"))
+
+cells_meth_wide <- pivot_wider(cells_meth_long,
+                                id_cols     = c(cell_id, sub_region, sub_type),
+                                names_from  = annotation,
+                                values_from = value) %>%
+  left_join(meta_grp %>% select(sub_region, sub_type, cell_class, major_type),
+            by = c("sub_region", "sub_type"))
+
+saveRDS(list(cells_adjS_wide = cells_adjS_wide,
+             cells_meth_wide = cells_meth_wide),
+        "ecker_cell_matrices.rds")
+
+cat("Cells (i_total):", nrow(cells_adjS_wide), "\n")
+cat("Cell class breakdown:\n")
+print(table(cells_adjS_wide$cell_class, useNA = "always"))
+```
+
+```{r cell_umap_adjS, fig.width = 5, fig.height = 5}
+meta_cols_cell <- c("cell_id", "sub_region", "sub_type", "cell_class", "major_type")
+
+umap_cell_adjS <- run_umap_wide(cells_adjS_wide, meta_cols_cell, n_neighbors = 15L)
+saveRDS(umap_cell_adjS, "ecker_umap_cell_i_total.rds")
+
+plot_umap_class(umap_cell_adjS,
+                title    = "Cell-level UMAP - i_total features",
+                subtitle = "per-cell i_total per annotation as feature vector")
+```
+
+## Cell-level: avg_meth across annotations
+
+```{r cell_umap_meth, fig.width = 5, fig.height = 5}
+umap_cell_meth <- run_umap_wide(cells_meth_wide, meta_cols_cell, n_neighbors = 15L)
+saveRDS(umap_cell_meth, "ecker_umap_cell_meth.rds")
+
+plot_umap_class(umap_cell_meth,
+                title    = "Cell-level UMAP - avg. methylation features",
+                subtitle = "per-cell avg. methylation per annotation as feature vector")
+```
+
+<!-- Section dropped: amet has no raw S, so the S-with-meth-regressed-out UMAP is not reproduced. -->
+
+## Group-level: adjH across annotations
+
+```{r group_umap_adjH, fig.width = 5, fig.height = 5}
+adjH_wide_grp <- all_grp_meta %>%
+  filter(!is.na(cell_class)) %>%
+  select(sub_region, sub_type, cell_class, major_type, annotation, median_adjH) %>%
+  pivot_wider(names_from = annotation, values_from = median_adjH)
+
+umap_grp_adjH <- run_umap_wide(adjH_wide_grp,
+                                meta_cols = c("sub_region", "sub_type",
+                                              "cell_class", "major_type"),
+                                n_neighbors = 5L)
+saveRDS(umap_grp_adjH, "ecker_umap_grp_jsd.rds")
+
+plot_umap_class(umap_grp_adjH,
+                title    = "Group-level UMAP - jsd features",
+                subtitle = "median jsd per annotation as feature vector")
+```
+
+## Group-level: avg_meth across annotations
+
+```{r group_umap_meth, fig.width = 5, fig.height = 5}
+meth_wide_grp <- all_grp_meta %>%
+  filter(!is.na(cell_class)) %>%
+  select(sub_region, sub_type, cell_class, major_type, annotation, median_meth) %>%
+  pivot_wider(names_from = annotation, values_from = median_meth)
+
+umap_grp_meth <- run_umap_wide(meth_wide_grp,
+                                meta_cols = c("sub_region", "sub_type",
+                                              "cell_class", "major_type"),
+                                n_neighbors = 5L)
+plot_umap_class(umap_grp_meth,
+                title    = "Group-level UMAP - avg. methylation features",
+                subtitle = "median avg. methylation per annotation as feature vector")
+```
+
+<!-- Section dropped: per-locus gene-level UMAP from .norm.det.out.gz is not reproduced. amet does not export per-locus jsd vectors per group; only per-feature jsd is available, which is already plotted above. -->
+
+<!-- Section dropped: paper UMAP overlay is not reproduced. amet's manifest does not carry the Ecker paper's L1UMAP coordinates or MajorRegion; revisit if those columns are wired through compose_ecker_metadata.py. -->
+
+# Session
+
+```{r session, cache = FALSE}
+sessionInfo()
+```

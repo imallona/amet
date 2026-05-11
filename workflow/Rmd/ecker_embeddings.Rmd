@@ -1,0 +1,429 @@
+---
+title: "Ecker: cell embeddings from genomic windows entropy"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+    number_sections: true
+    df_print: default
+    theme: lumen
+params:
+  features_dir: ""
+  win_cell_feature: ""
+  win_feature: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(data.table)
+  library(readr)
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(BiocParallel)
+  library(uwot)
+  library(irlba)
+  library(matrixStats)
+
+  library(cluster)
+  library(viridis)
+  library(viridisLite)
+  library(cowplot)
+  library(ggrastr)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+source(file.path(repo_root, "workflow", "scripts", "embedding_utils.R"))
+
+param <- SerialParam()
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = TRUE,
+  cache = FALSE,
+  fig.path = "ecker_embeddings_plots/"
+)
+```
+
+```{r constants}
+N_HVW <- 1000
+N_PCS <- 10
+
+## Only the methylation-stable amet score (i_total) and methylation are
+## carried forward; raw S and adjS variants are not exported.
+assay_map <- c(
+  "i_total" = "i_total",
+  "meth"    = "methylation"
+)
+```
+
+## Cell selection and NA-aware embedding
+
+The cells embedded here are not a uniformly random subsample. For each
+(SubRegion, SubType) annotation we keep up to a fixed number of cells, picking
+the highest-coverage cells (file size on disk is monotonic in CpG count) and
+distributing the slots round-robin across plates. Stratifying by plate first
+keeps a single high-coverage plate from dominating an annotation. The visible
+cost is that any residual plate effect (cell cycle, batch) is preserved rather
+than averaged out across plates; the alternative of random sampling produced
+embeddings collapsed to a handful of cells per group because of how few windows
+were complete.
+
+scBS-seq methylation and per-cell entropy values have a meaningful zero
+(unmethylated CpG, zero local entropy) which is distinct from missing coverage.
+Imputing NAs to zero would bias both the variance signal and the embedding
+geometry, so the pipeline keeps NAs as NAs throughout: HVF selection scores
+features by variance times coverage fraction, and when too few windows have
+complete coverage the PCA step uses NIPALS (`pcaMethods`) which iterates over
+the observed entries without filling in missing values. Cells are dropped only
+when their per-cell NA fraction is above the QC threshold; once they pass that
+filter they are never dropped to make a feature block dense.
+
+# Load data
+
+```{r load_amet}
+## amet ships per-cell-per-window i_total and per-cell mean_meth.
+## Build cells x windows matrices, one per assay.
+win_cf <- fread(params$win_cell_feature)
+man <- fread(params$manifest)
+
+col_data <- as.data.frame(unique(win_cf[, .(cell_id)]))
+col_data <- merge(col_data, as.data.frame(man),
+                  by = "cell_id", all.x = TRUE)
+col_data$cell_class <- factor(col_data$cell_class)
+col_data$major_type <- factor(col_data$major_type)
+col_data$sub_region <- factor(col_data$sub_region)
+col_data$sub_type   <- factor(col_data$sub_type)
+rownames(col_data) <- col_data$cell_id
+
+cc_lvls <- sort(unique(as.character(col_data$cell_class)))
+
+build_assay_mat <- function(value_col) {
+  m <- dcast(win_cf, feature_id ~ cell_id, value.var = value_col,
+             fun.aggregate = mean)
+  rn <- m$feature_id
+  m <- as.matrix(m[, -1])
+  rownames(m) <- rn
+  m[!is.finite(m)] <- NA
+  m[, col_data$cell_id, drop = FALSE]
+}
+
+assays_list <- list(
+  i_total = build_assay_mat("i_total"),
+  meth    = build_assay_mat("mean_meth")
+)
+
+cat("Cells:", nrow(col_data), "\n")
+cat("Windows:", nrow(assays_list$i_total), "\n")
+cat("Assays:", paste(names(assays_list), collapse = ", "), "\n")
+cat("Cell classes:\n")
+print(table(col_data$cell_class, useNA = "ifany"))
+```
+
+# Shared helpers
+
+```{r helpers}
+hvw_pca_umap <- function(mat) {
+  run_embedding(mat, n_hvf = N_HVW, n_pcs = N_PCS,
+                n_neighbors = 15L, min_dist = 0.3, seed = 42L)
+}
+
+plot_umap_cellclass <- function(coords, kept_cols, title_prefix) {
+  df <- data.frame(
+    umap1      = coords[, 1], umap2 = coords[, 2],
+    cell_class = col_data$cell_class[kept_cols]
+  )
+  ggplot(df, aes(x = umap1, y = umap2, color = cell_class)) +
+    geom_point_rast(size = 0.3, alpha = 0.5, raster.dpi = 300) +
+    scale_color_manual(values = ecker_cell_class_pal) +
+    labs(title = paste(title_prefix, "- cell class"),
+         x = "UMAP 1", y = "UMAP 2") +
+    guides(color = guide_legend(override.aes = list(size = 2, alpha = 1), ncol = 2)) +
+    theme_ng()
+}
+
+plot_umap_majortype <- function(coords, kept_cols, title_prefix) {
+  df <- data.frame(
+    umap1      = coords[, 1], umap2 = coords[, 2],
+    major_type = col_data$major_type[kept_cols]
+  )
+  ggplot(df, aes(x = umap1, y = umap2, color = major_type)) +
+    geom_point_rast(size = 0.3, alpha = 0.5, raster.dpi = 300) +
+    scale_color_manual(values = ecker_major_type_pal) +
+    labs(title = paste(title_prefix, "- major type"),
+         x = "UMAP 1", y = "UMAP 2") +
+    guides(color = guide_legend(override.aes = list(size = 2, alpha = 1), ncol = 2)) +
+    theme_ng()
+}
+```
+
+# Per-window embeddings (HVW -> PCA -> UMAP)
+
+HVW selection and NA handling: see `embedding_utils.R`.
+Top `r N_HVW` most variable windows retained per assay before PCA and UMAP.
+
+```{r win_hvw_pca_umap}
+win_embeds <- lapply(names(assay_map), function(akey) {
+  if (!akey %in% names(assays_list)) return(NULL)
+  hvw_pca_umap(assays_list[[akey]])
+})
+names(win_embeds) <- assay_map
+
+failed <- names(which(sapply(win_embeds, is.null)))
+if (length(failed) > 0)
+  warning("run_embedding returned NULL for: ", paste(failed, collapse = ", "))
+
+cat("\nHVF selection summary:\n")
+for (nm in names(win_embeds)) {
+  em <- win_embeds[[nm]]
+  if (is.null(em)) {
+    cat(nm, ": NULL\n")
+  } else {
+    cat(nm, ": HVF =", length(em$hvf_idx),
+        "| cells =", sum(em$kept_cols), "/", nrow(col_data), "\n")
+  }
+}
+
+saveRDS(
+  list(col_data    = col_data,
+       n_windows   = nrow(assays_list$i_total),
+       n_cells     = nrow(col_data),
+       assay_names = names(assays_list),
+       win_embeds  = win_embeds,
+       assay_map   = assay_map),
+  "ecker_umap_windows_i_total.rds", compress = "xz"
+)
+```
+
+```{r per_cell_summary}
+per_cell_summary <- data.frame(
+  cell_id      = col_data$cell_id,
+  cell_class   = col_data$cell_class,
+  major_type   = col_data$major_type,
+  sub_type     = col_data$sub_type,
+  mean_meth    = colMeans(assays_list$meth,    na.rm = TRUE),
+  mean_i_total = colMeans(assays_list$i_total, na.rm = TRUE),
+  stringsAsFactors = FALSE
+)
+write.csv(per_cell_summary, "ecker_per_cell_summary.csv", row.names = FALSE)
+```
+
+## By cell class {.tabset .tabset-pills}
+
+<!-- Section dropped: amet has no raw S, so the win_cc_S chunk is not reproduced. -->
+
+```{r win_cc_i_total, fig.width = ng_fig_size(2, 1, panel_mm = 60)$w, fig.height = ng_fig_size(2, 1, panel_mm = 60)$h}
+### i_total
+if (!is.null(win_embeds[["i_total"]])) {
+  p1 <- plot_umap_cellclass(win_embeds[["i_total"]]$umap,
+                            win_embeds[["i_total"]]$kept_cols, "i_total")
+  p2 <- plot_umap_majortype(win_embeds[["i_total"]]$umap,
+                            win_embeds[["i_total"]]$kept_cols, "i_total")
+  print(plot_grid(p1, p2, nrow = 1))
+}
+```
+
+```{r win_cc_meth, fig.width = ng_fig_size(2, 1, panel_mm = 60)$w, fig.height = ng_fig_size(2, 1, panel_mm = 60)$h}
+### methylation
+if (!is.null(win_embeds[["methylation"]])) {
+  p1 <- plot_umap_cellclass(win_embeds[["methylation"]]$umap,
+                            win_embeds[["methylation"]]$kept_cols, "methylation")
+  p2 <- plot_umap_majortype(win_embeds[["methylation"]]$umap,
+                            win_embeds[["methylation"]]$kept_cols, "methylation")
+  print(plot_grid(p1, p2, nrow = 1))
+}
+```
+
+## Two-panel comparison (cell class)
+
+```{r win_panel_cc, fig.width = ng_fig_size(2, 1, panel_mm = 55)$w, fig.height = ng_fig_size(2, 1, panel_mm = 55)$h}
+ok_embeds <- Filter(Negate(is.null), win_embeds)
+df_panel <- bind_rows(lapply(names(ok_embeds), function(lbl) {
+  em <- ok_embeds[[lbl]]
+  data.frame(umap1      = em$umap[, 1], umap2 = em$umap[, 2],
+             cell_class = col_data$cell_class[em$kept_cols],
+             assay      = lbl)
+}))
+df_panel$assay <- factor(df_panel$assay, levels = assay_map)
+
+ggplot(df_panel, aes(x = umap1, y = umap2, color = cell_class)) +
+  geom_point_rast(size = 0.2, alpha = 0.5, raster.dpi = 300) +
+  scale_color_manual(values = ecker_cell_class_pal) +
+  facet_wrap(~ assay, nrow = 1) +
+  labs(x = "UMAP 1", y = "UMAP 2",
+       title = "Per-window embeddings (HVW -> PCA -> UMAP)") +
+  guides(color = guide_legend(override.aes = list(size = 2, alpha = 1), ncol = 2)) +
+  theme_ng()
+```
+
+## Variance explained
+
+```{r win_varexp, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(2, 1)$h}
+ve_win <- bind_rows(lapply(names(assay_map), function(akey) {
+  lbl <- assay_map[[akey]]
+  if (is.null(win_embeds[[lbl]]) || !akey %in% names(assays_list)) return(NULL)
+  kept <- win_embeds[[lbl]]$kept_cols
+  hvw_mat <- assays_list[[akey]][win_embeds[[lbl]]$hvf_idx, kept, drop = FALSE]
+  data.frame(
+    assay      = lbl,
+    cell_class = median(row_variance_explained(hvw_mat, col_data$cell_class[kept]), na.rm = TRUE),
+    sub_type   = median(row_variance_explained(hvw_mat, col_data$sub_type[kept]),   na.rm = TRUE))
+}))
+
+ve_long <- pivot_longer(ve_win, c("cell_class", "sub_type"),
+                        names_to = "variable", values_to = "median_ve")
+ve_long$assay <- factor(ve_long$assay, levels = assay_map)
+
+write.csv(ve_long, "ecker_win_varexp.csv", row.names = FALSE)
+
+ggplot(ve_long, aes(x = assay, y = median_ve, fill = variable)) +
+  geom_col(position = position_dodge(width = 0.8)) +
+  scale_fill_manual(values = c("cell_class" = "#0072B2", "sub_type" = "#E69F00")) +
+  labs(x = NULL, y = "median % variance explained",
+       title = "Variance explained (per-window HVW)") +
+  theme_ng()
+```
+
+## Embedding diagnostics
+
+Why does per-window variance explained stay low? Candidates are high NA
+fractions per window, few HVFs surviving QC, cells dropped by the sparse
+fallback, and per-HVF variance being low in absolute terms. The diagnostic
+below logs these quantities per assay to `ecker_embedding_diagnostics.csv`
+and a compact text summary.
+
+```{r embedding_diagnostic}
+diag_rows <- list()
+
+na_stats <- function(mat) {
+  na_frac_row <- rowMeans(is.na(mat))
+  na_frac_col <- colMeans(is.na(mat))
+  list(
+    row_na_median   = median(na_frac_row, na.rm = TRUE),
+    row_na_p90      = quantile(na_frac_row, 0.9, na.rm = TRUE),
+    col_na_median   = median(na_frac_col, na.rm = TRUE),
+    col_na_p90      = quantile(na_frac_col, 0.9, na.rm = TRUE),
+    n_complete_rows = sum(na_frac_row == 0, na.rm = TRUE)
+  )
+}
+
+for (akey in names(assay_map)) {
+  lbl <- assay_map[[akey]]
+  if (!akey %in% names(assays_list)) next
+  em  <- win_embeds[[lbl]]
+  if (is.null(em)) next
+
+  mat  <- assays_list[[akey]]
+  ns   <- na_stats(mat)
+
+  hvf_mat <- mat[em$hvf_idx, em$kept_cols, drop = FALSE]
+  hvf_row_var <- matrixStats::rowVars(hvf_mat, na.rm = TRUE)
+
+  diag_rows[[lbl]] <- data.frame(
+    assay                  = lbl,
+    stage                  = em$stage,
+    n_cells_total          = nrow(col_data),
+    n_cells_used           = sum(em$kept_cols),
+    cells_dropped_fraction = 1 - sum(em$kept_cols) / nrow(col_data),
+    n_windows_total        = nrow(mat),
+    n_complete_rows        = ns$n_complete_rows,
+    row_na_median          = ns$row_na_median,
+    row_na_p90             = as.numeric(ns$row_na_p90),
+    col_na_median          = ns$col_na_median,
+    col_na_p90             = as.numeric(ns$col_na_p90),
+    n_hvf                  = length(em$hvf_idx),
+    hvf_var_median         = median(hvf_row_var, na.rm = TRUE),
+    hvf_var_q25            = quantile(hvf_row_var, 0.25, na.rm = TRUE),
+    hvf_var_q75            = quantile(hvf_row_var, 0.75, na.rm = TRUE),
+    stringsAsFactors       = FALSE
+  )
+}
+
+diag_df <- bind_rows(diag_rows)
+write.csv(diag_df, "ecker_embedding_diagnostics.csv", row.names = FALSE)
+
+diag_lines <- c(
+  "Ecker embedding diagnostic summary",
+  paste0("Total cells: ", nrow(col_data)),
+  paste0("Total windows: ", nrow(assays_list$i_total)),
+  ""
+)
+for (lbl in diag_df$assay) {
+  r <- diag_df[diag_df$assay == lbl, ]
+  diag_lines <- c(diag_lines, sprintf(
+    "[%s] stage=%s | cells used=%d/%d (%.1f%% dropped) | HVF=%d | complete windows=%d | row NA median=%.3f | HVF row variance median=%.4f",
+    lbl, r$stage,
+    r$n_cells_used, r$n_cells_total,
+    100 * r$cells_dropped_fraction,
+    r$n_hvf, r$n_complete_rows, r$row_na_median, r$hvf_var_median
+  ))
+}
+writeLines(diag_lines, "ecker_embedding_diagnostics.txt")
+
+cat(paste(diag_lines, collapse = "\n"), "\n")
+```
+
+## Silhouette scores
+
+```{r win_sil, fig.width = ng_fig_size(2, 1)$w, fig.height = ng_fig_size(1, 1)$h}
+sil_win <- data.frame(
+  assay = names(ok_embeds),
+  silhouette_cell_class = sapply(names(ok_embeds), function(lbl)
+    sil_score(ok_embeds[[lbl]]$umap,
+              col_data$cell_class[ok_embeds[[lbl]]$kept_cols])),
+  silhouette_sub_region = sapply(names(ok_embeds), function(lbl)
+    sil_score(ok_embeds[[lbl]]$umap,
+              col_data$sub_region[ok_embeds[[lbl]]$kept_cols]))
+)
+
+sil_long <- pivot_longer(sil_win, c("silhouette_cell_class", "silhouette_sub_region"),
+                         names_to = "grouping", values_to = "silhouette")
+sil_long$grouping <- sub("silhouette_", "", sil_long$grouping)
+sil_long$assay    <- factor(sil_long$assay, levels = assay_map)
+
+ggplot(sil_long, aes(x = assay, y = silhouette, fill = grouping)) +
+  geom_col(position = position_dodge(width = 0.8)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+  scale_fill_manual(values = c("cell_class" = "#0072B2", "sub_region" = "#E69F00")) +
+  labs(x = NULL, y = "mean silhouette",
+       title = "Cluster separation by assay") +
+  theme_ng()
+```
+
+# Per-cell entropy summaries
+
+```{r cell_df}
+cell_df <- data.frame(
+  cell_class   = col_data$cell_class,
+  sub_region   = col_data$sub_region,
+  mean_i_total = colMeans(assays_list$i_total, na.rm = TRUE),
+  mean_meth    = colMeans(assays_list$meth,    na.rm = TRUE)
+)
+```
+
+```{r violins, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 2)$h}
+cell_long <- pivot_longer(cell_df, c("mean_i_total", "mean_meth"),
+                          names_to = "metric", values_to = "value")
+
+ggplot(cell_long, aes(x = cell_class, y = value, fill = cell_class)) +
+  geom_violin(trim = FALSE, scale = "width", alpha = 0.7) +
+  geom_boxplot(width = 0.1, outlier.size = 0.3, alpha = 0.6) +
+  scale_fill_manual(values = ecker_cell_class_pal) +
+  facet_grid(metric ~ ., scales = "free_y") +
+  labs(x = "cell class", y = "per-cell mean") +
+  theme_ng() +
+  theme(legend.position = "none")
+```
+
+```{r session}
+sessionInfo()
+```

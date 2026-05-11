@@ -28,6 +28,9 @@ fn main() -> Result<()> {
         (None, Some(p)) => p.clone(),
         _ => unreachable!("clap ArgGroup ensures exactly one of --genome and --cpg-reference"),
     };
+    if cli.build_cpg_only {
+        return Ok(());
+    }
     eprintln!("[amet] reading CpG reference: {}", cpg_path.display());
     let reference = read_cpg_reference(&cpg_path).context("reading CpG reference")?;
     let total_cpgs: usize = reference.positions.iter().map(|v| v.len()).sum();
@@ -37,18 +40,25 @@ fn main() -> Result<()> {
         total_cpgs
     );
 
-    eprintln!("[amet] reading features: {}", cli.features.display());
-    let features = read_features(&cli.features, &reference).context("reading features")?;
+    let cells_path = cli.cells.as_ref().expect("--cells required");
+    let features_path = cli.features.as_ref().expect("--features required");
+    let output_prefix = cli
+        .output_prefix
+        .as_ref()
+        .expect("--output-prefix required");
+
+    eprintln!("[amet] reading features: {}", features_path.display());
+    let features = read_features(features_path, &reference).context("reading features")?;
     eprintln!("[amet] features: {}", features.len());
 
-    eprintln!("[amet] reading manifest: {}", cli.cells.display());
-    let manifest = read_manifest(&cli.cells, &cli.group_column).context("reading manifest")?;
+    eprintln!("[amet] reading manifest: {}", cells_path.display());
+    let manifest = read_manifest(cells_path, &cli.group_column).context("reading manifest")?;
     eprintln!("[amet] cells: {}", manifest.len());
 
     let i_max_lag = cli.i_max_lag as usize;
-    let cf_path = with_suffix(&cli.output_prefix, ".cell_feature.tsv.gz");
-    let feat_path = with_suffix(&cli.output_prefix, ".feature.tsv.gz");
-    let pair_path = with_suffix(&cli.output_prefix, ".pair_counts.tsv.gz");
+    let cf_path = with_suffix(output_prefix, ".cell_feature.tsv.gz");
+    let feat_path = with_suffix(output_prefix, ".feature.tsv.gz");
+    let pair_path = with_suffix(output_prefix, ".pair_counts.tsv.gz");
 
     let mut cf_writer = open_write(&cf_path).context("opening cell_feature output")?;
     let mut feat_writer = open_write(&feat_path).context("opening feature output")?;

@@ -1,0 +1,269 @@
+---
+title: "CRC by genomic tiles, SCE-based"
+author: "Izaskun Mallona"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+    number_sections: true
+    df_print: default
+    theme: lumen
+params:
+  features_dir: ""
+  windows_dir: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+  windows_sce: ""
+  de: ""
+  corrected_sce: ""
+---
+
+```{r, setup}
+suppressPackageStartupMessages({
+  library(readr)
+  library(ggplot2)
+  library(knitr)
+  library(ComplexHeatmap)
+  library(viridis)
+  library(tidyr)
+  library(Matrix)
+  library(limma)
+  library(BiocParallel)
+
+  library(dplyr)
+
+  library(SingleCellExperiment)
+  library(SummarizedExperiment)
+
+  library(pheatmap)
+
+  library(reshape2)
+  library(scater)
+})
+```
+
+```{r}
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+source(file.path(repo_root, "workflow", "scripts", "diff_testing.R"))
+
+param <- SerialParam()
+```
+
+```{r}
+opts_chunk$set(
+  fig.width = 5,
+  fig.height = 5,
+  cache = TRUE,
+  include = TRUE,
+  fig.path = "crc_windows_plots_sce/",
+  dev = c("png", "svg"),
+  cache.lazy = FALSE,
+  warning = TRUE,
+  message = TRUE
+)
+```
+
+
+```{r}
+windows_sce <- readRDS(params$windows_sce)
+de          <- readRDS(params$de)
+```
+
+Let's get some basic stats about numbers of up/down, per comparison
+
+```{r}
+summarize_contrast <- function(df, alpha = 0.05) {
+  sig <- df %>% filter(adj_p < alpha)
+  tibble(
+    total_significant = nrow(sig),
+    upregulated   = sum(sig$moderated_t >= 0, na.rm = TRUE),
+    downregulated = sum(sig$moderated_t < 0, na.rm = TRUE)
+  )
+}
+
+summary_table <- lapply(names(de), function(name) {
+  out <- summarize_contrast(de[[name]]$coefs_df)
+  cbind(contrast = name, out)
+}) %>% bind_rows()
+
+summary_table
+
+df_long <- melt(
+  summary_table,
+  id.vars = "contrast",
+  measure.vars = c("upregulated", "downregulated"),
+  variable.name = "direction",
+  value.name = "count"
+)
+
+ggplot(df_long, aes(x = contrast, y = count, fill = direction)) +
+  geom_col(position = position_dodge(width = 0.8)) +
+  geom_text(aes(label = count),
+            position = position_dodge(width = 0.8),
+            vjust = -0.3, size = 2.5) +
+  scale_y_continuous(trans = "log1p",
+                     breaks = c(0, 1, 10, 100, 1000, 10000),
+                     labels = c(0, 1, 10, 100, 1000, 10000)) +
+  scale_fill_manual(values = c("upregulated" = "#1b9e77",
+                               "downregulated" = "#d95f02")) +
+  theme_ng() +
+  theme(axis.text = element_text(size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Differentially entropy windows per contrast",
+       y = "Number of windows (log1p scale)",
+       x = "Contrast")
+
+```
+
+Filter DE contrasts to those having NC as baseline.
+
+```{r}
+de <- de[c('pt_vs_nc', 'ln_vs_nc', 'ml_vs_nc', 'mp_vs_nc')]
+
+
+summary_table <- lapply(names(de), function(name) {
+  out <- summarize_contrast(de[[name]]$coefs_df)
+  cbind(contrast = name, out)
+}) %>% bind_rows()
+
+summary_table
+
+df_long <- melt(
+  summary_table,
+  id.vars = "contrast",
+  measure.vars = c("upregulated", "downregulated"),
+  variable.name = "direction",
+  value.name = "count"
+)
+
+ggplot(df_long, aes(x = contrast, y = count, fill = direction)) +
+  geom_col(position = position_dodge(width = 0.8)) +
+  geom_text(aes(label = count),
+            position = position_dodge(width = 0.8),
+            vjust = -0.3, size = 2.5) +
+  scale_y_continuous(trans = "log1p",
+                     breaks = c(0, 1, 10, 100, 1000, 10000),
+                     labels = c(0, 1, 10, 100, 1000, 10000)) +
+  scale_fill_manual(values = c("upregulated" = "#1b9e77",
+                               "downregulated" = "#d95f02")) +
+  theme_ng() +
+  theme(axis.text = element_text(size = 7),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Differentially entropy windows per contrast",
+       y = "Number of windows (log1p scale)",
+       x = "Contrast")
+```
+
+
+
+For plotting entropies: I cannot use the residuals of the fits above. But I can anyway fit a model on i_total vs avg meth and use the residuals, without patient or location covars, to do general plots. Sort of poor woman's corrected i_total.
+
+```{r}
+formula <- "sampen ~ meth + I(meth^2)"
+
+str(assay(windows_sce, 'sampen'))
+
+rowwise_lm_residuals <- function(i) {
+    df <- data.frame(
+        sampen  = assay(windows_sce, 'sampen')[i, ],
+        meth    = assay(windows_sce, 'meth')[i, ])
+
+    fit <- try(lm(formula, data = df), silent = TRUE)
+    if (inherits(fit, "try-error")) return(rep(NA, nrow(df)))
+    res <- residuals(fit)
+    return(res)
+}
+
+res_mat <- do.call(rbind, bplapply(seq_len(nrow(windows_sce)), rowwise_lm_residuals,
+                                   BPPARAM = param))
+
+rownames(res_mat) <- rownames(windows_sce)
+colnames(res_mat) <- colnames(windows_sce)
+
+assay(windows_sce, "sampen_corrected") <- res_mat
+
+colData(windows_sce)$location <- factor(
+  colData(windows_sce)$location,
+  levels = c("NC", "PT", "LN", "ML", "MP", "MO"))
+```
+
+
+
+
+```{r}
+
+df <- reshape2::melt(as.matrix(assay(windows_sce, "sampen_corrected")[,1:min(200, ncol(windows_sce))]))
+ggplot(df, aes(value)) + geom_density(fill="steelblue", alpha=0.5) +
+  labs(title="Distribution of corrected i_total values (downsampled)") +
+    theme_ng()
+```
+
+
+```{r, fig.width = 8, fig.height = 4}
+
+df_violin <- data.frame(
+  value = colMeans(assay(windows_sce, "sampen_corrected")),
+  location = colData(windows_sce)$location,
+  patient  = colData(windows_sce)$patient
+)
+
+ggplot(df_violin, aes(x = location, y = value)) +
+  geom_violin(trim = FALSE, scale = "width") +
+  geom_boxplot(width = 0.1, outlier.size = 0.5) +
+    facet_wrap(~patient) +
+  theme_ng() +
+  labs(y = expression("Mean " * i[total] * " corrected"),
+       title = "Distribution per location and patient")
+```
+
+```{r, fig.width = 8, fig.height = 4}
+df_cells <- data.frame(
+  mean_sampen = colMeans(assay(windows_sce, "sampen")),
+  mean_sampen_corrected = colMeans(assay(windows_sce, "sampen_corrected")),
+  location = colData(windows_sce)$location,
+  patient = colData(windows_sce)$patient
+)
+
+ggplot(df_cells, aes(x = mean_sampen, y = mean_sampen_corrected, color = location)) +
+  geom_point(alpha = 0.8) +
+  theme_ng() +
+    facet_wrap(~patient) +
+  labs(x = expression("mean " * i[total]),
+       y = expression("mean " * i[total] * " corrected"),
+       title = "mean i_total vs mean i_total (corrected), per cell")
+
+```
+
+Row annotation (rowData) is re-read from the annotation file here because the SCE was built from a partial read in crc_windows.Rmd; the full annotation is loaded and assigned below.
+
+amet's window BED has only (chrom, start, end, feature_id) and so carries no per-window genomic-feature columns. The annotation reader is replaced with a no-op; binarized annotation columns and their downstream plots are not portable.
+
+
+```{r}
+## The annotation merge / binarization pipeline cannot run on amet's window
+## BED. Save the corrected SCE as-is.
+
+corrected_path <- if (nzchar(params$corrected_sce))
+                    params$corrected_sce else
+                    file.path(params$out_dir, "sce_windows_colon_corrected.rds")
+dir.create(dirname(corrected_path), showWarnings = FALSE, recursive = TRUE)
+saveRDS(windows_sce, corrected_path)
+```
+
+<!-- Section dropped: per-cell averages over binarized genomic-feature columns (genes, H3K27me3, SCNAs, HMM states, ...) contrasting up/down DE windows. amet's window BED carries none of these columns, so these plots cannot be reproduced. -->
+
+# Aggregate by rowdata categories
+
+amet's window BED does not provide per-window genomic feature columns, so the aggregation (per-cell median i_total per genomic category, residual entropy after removing annotation effects) is dropped here.
+
+<!-- Section dropped: Aggregate by rowdata categories / per-cell residuals require binarized rowData annotation columns that amet's window BED does not provide. -->
+
+```{r}
+sessionInfo()
+```

@@ -10,16 +10,39 @@ dependencies:
   - r-ggplot2
   - r-dplyr
   - r-tidyr
+  - r-readr
   - r-patchwork
   - r-svglite
+  - r-ggridges
+  - r-uwot
+  - r-irlba
+  - r-viridis
+  - r-ggrepel
+  - r-reshape2
   - r-remotes
   - r-rmarkdown
   - r-knitr
   - r-shiny
   - r-httpuv
+  - r-circlize
+  - r-ggrastr
+  - r-cowplot
+  - r-matrixstats
+  - r-cluster
+  - r-bookdown
+  - r-purrr
+  - r-pheatmap
+  - r-upsetr
+  - r-igraph
+  - r-ggraph
+  - bioconductor-biocparallel
+  - bioconductor-complexheatmap
+  - bioconductor-pcamethods
   - bioconductor-singlecellexperiment
   - bioconductor-summarizedexperiment
   - bioconductor-qvalue
   - bioconductor-scmet
+  - bioconductor-limma
+  - bioconductor-scater
   - bioconductor-txdb.hsapiens.ucsc.hg19.knowngene
   - bioconductor-txdb.hsapiens.ucsc.hg38.knowngene

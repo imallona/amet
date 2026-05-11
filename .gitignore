@@ -6,8 +6,12 @@ method/target
 # Workflow outputs
 results/
 workflow/.snakemake/
+.snakemake/
 workflow/.Rhistory
 workflow/.RData
+
+# knitr per-Rmd plot dirs (side effect of rmarkdown::render)
+workflow/Rmd/*_plots/
 
 # R artefacts
 .Rhistory

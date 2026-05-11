@@ -1,0 +1,119 @@
+---
+title: "Argelaguet: single-cell genomic windows summaries"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
+    number_sections: true
+    df_print: default
+    theme: lumen
+params:
+  features_dir: ""
+  win_cell_feature: ""
+  win_feature: ""
+  win_bed: ""
+  manifest: ""
+  out_dir: ""
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(data.table)
+  library(readr)
+  library(dplyr)
+  library(ggplot2)
+  library(BiocParallel)
+})
+
+repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
+source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
+source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+
+param <- SerialParam()
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = TRUE,
+  cache = FALSE,
+  fig.path = "argelaguet_windows_plots/"
+)
+```
+
+```{r load_meta}
+man <- fread(params$manifest)
+cat("Cells in manifest:", nrow(man), "\n")
+cat("Stages:", paste(sort(unique(man$stage)), collapse = ", "), "\n")
+cat("Lineages:", length(unique(man$lineage10x)), "\n")
+```
+
+```{r load_amet_windows}
+## amet's window-scope output: two long tables. per-cell-per-window i_total
+## + mean_meth, and per-window-per-group jsd (loaded but not used in this
+## Rmd, kept for symmetry with the per-feature reports).
+win_cf <- fread(params$win_cell_feature)
+win_cf <- merge(win_cf, man[, .(cell_id, stage, lineage10x)],
+                by = "cell_id", all.x = TRUE)
+setnames(win_cf, "lineage10x", "lineage")
+
+cat("Cell-window rows:", nrow(win_cf), "\n")
+cat("Unique windows:", uniqueN(win_cf$feature_id), "\n")
+cat("Unique cells:", uniqueN(win_cf$cell_id), "\n")
+cat("Stages in data:\n")
+print(table(win_cf$stage, useNA = "ifany"))
+cat("Lineages in data:\n")
+print(table(win_cf$lineage, useNA = "ifany"))
+```
+
+```{r filter_na}
+## NA filter: drop windows missing in > 30% of cells. Applied here on the
+## long table.
+n_cells <- uniqueN(win_cf$cell_id)
+win_cov <- win_cf[, .(cov_frac = .N / n_cells), by = feature_id]
+keep_win <- win_cov[cov_frac >= 0.7, feature_id]
+win_cf <- win_cf[feature_id %in% keep_win]
+cat("Windows after NA filter (>= 70% cells covered):", uniqueN(win_cf$feature_id), "\n")
+```
+
+<!-- Section dropped: amet's i_total is methylation-stable by construction, so no per-window meth-correction step is needed. -->
+
+# QC
+
+```{r cell_qc_df}
+cell_df <- win_cf[, .(
+  mean_i_total = mean(i_total,  na.rm = TRUE),
+  mean_meth    = mean(mean_meth, na.rm = TRUE)
+), by = .(cell_id, stage, lineage)]
+
+write.csv(cell_df, "argelaguet_per_cell_summary.csv", row.names = FALSE)
+```
+
+<!-- Section dropped: amet has no raw S, so the sampen_by_stage chunk is not reproduced. -->
+
+```{r itotal_by_stage, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
+ggplot(cell_df, aes(x = stage, y = mean_i_total, fill = stage)) +
+  geom_violin(trim = FALSE, scale = "width") +
+  geom_boxplot(width = 0.1, outlier.size = 0.5, alpha = 0.5) +
+  theme_ng(base_size = 8) +
+  theme(legend.position = "none") +
+  labs(y = expression("mean " * i[total]),
+       title = expression("Per-cell mean " * i[total] * " by stage"))
+```
+
+```{r meth_vs_itotal, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
+ggplot(cell_df, aes(x = mean_meth, y = mean_i_total, color = stage)) +
+  geom_point(size = 0.5, alpha = 0.6) +
+  scale_color_manual(values = c("E4.5" = "#440154", "E5.5" = "#31688e",
+                                "E6.5" = "#35b779", "E7.5" = "#fde725")) +
+  guides(color = guide_legend(override.aes = list(size = 2, alpha = 1))) +
+  theme_ng(base_size = 8) +
+  labs(x = "mean methylation", y = expression("mean " * i[total]),
+       title = expression("Global " * i[total] * " vs methylation per cell"))
+```
+
+```{r session}
+sessionInfo()
+```

@@ -30,6 +30,11 @@ dependencies:
   - r-matrixstats
   - r-cluster
   - r-bookdown
+  - r-purrr
+  - r-pheatmap
+  - r-upsetr
+  - r-igraph
+  - r-ggraph
   - bioconductor-biocparallel
   - bioconductor-complexheatmap
   - bioconductor-pcamethods
@@ -37,5 +42,7 @@ dependencies:
   - bioconductor-summarizedexperiment
   - bioconductor-qvalue
   - bioconductor-scmet
+  - bioconductor-limma
+  - bioconductor-scater
   - bioconductor-txdb.hsapiens.ucsc.hg19.knowngene
   - bioconductor-txdb.hsapiens.ucsc.hg38.knowngene

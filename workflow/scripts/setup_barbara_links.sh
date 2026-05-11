@@ -16,6 +16,7 @@
 set -euo pipefail
 
 YAMET="${YAMET:-$HOME/src/yamet/workflow}"
+YAMET_HG19_CURATED="${YAMET_HG19_CURATED:-$HOME/src/yamet/hg19}"
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 res="$repo_root/results"
@@ -53,12 +54,16 @@ link "$YAMET/argelaguet/sample_metadata.txt"     "$res/argelaguet/sample_metadat
 link "$YAMET/argelaguet/features/genomic_contexts" "$res/argelaguet/features"
 link "$YAMET/mm10"                               "$res/argelaguet/mm10"
 
-## CRC
+## CRC. hg19 = yamet/workflow/hg19 (cpgIslandExt, SCNAs, genes/lines/sines as
+## .bed.gz). hg19_curated = yamet/hg19 (chromHMM, ChIP, lamin, PMD as .bed).
 link "$YAMET/data/crc/raw"                       "$res/crc/raw"
 link "$YAMET/hg19"                               "$res/crc/hg19"
+link "$YAMET_HG19_CURATED"                       "$res/crc/hg19_curated"
 
-## Ecker
+## Ecker. mm10 shares the same dir as argelaguet (yamet's curated mm10 tree
+## with ENCODE ChIP, UCSC repeats, and genes/promoters built off Gencode).
 link "$YAMET/data/brain/raw"                     "$res/ecker/raw"
+link "$YAMET/mm10"                               "$res/ecker/mm10"
 link "$YAMET/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx" \
      "$res/ecker/41586_2020_3182_MOESM9_ESM.xlsx"
 link "$YAMET/data/brain/raw/MOp_Metadata.tsv.gz" "$res/ecker/nemo_meta.tsv.gz"

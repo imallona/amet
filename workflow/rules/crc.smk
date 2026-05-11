@@ -54,16 +54,32 @@ CRC_ANNOTATIONS = {
     "scna":         ["crc01_nc_scna", "crc01_gain_scna", "crc01_lost_scna"],
 }
 
-## Annotations whose source BEDs are present locally (built from UCSC etc.).
-## Extend this set as more annotations are pulled.
-_CRC_LOCAL_ANNOTATIONS = {
-    "cpgIslandExt": ["cpgIslandExt"],
-}
-
+_CRC_LOCAL_ANNOTATIONS = CRC_ANNOTATIONS
 _CRC_LOCAL_PAIRS = [(sc, c) for c, subs in _CRC_LOCAL_ANNOTATIONS.items() for sc in subs]
 _CRC_ALL_PAIRS   = [(sc, c) for c, subs in CRC_ANNOTATIONS.items() for sc in subs]
 _CRC_SUBCAT_RE = "|".join(sorted({sc for sc, _ in _CRC_ALL_PAIRS}))
 _CRC_CAT_RE    = "|".join(sorted({c  for _, c  in _CRC_ALL_PAIRS}))
+
+## yamet hg19 trees. Both symlinked in by setup_barbara_links.sh:
+##   hg19         = yamet/workflow/hg19 (cpgIslandExt, SCNAs, genes/lines/sines.bed.gz)
+##   hg19_curated = yamet/hg19          (chromHMM, ChIP, lamin, PMD as plain .bed)
+CRC_HG19_WF      = op.join(CRC_DATA, "hg19")
+CRC_HG19_CURATED = op.join(CRC_DATA, "hg19_curated")
+
+def _crc_yamet_bed_path(subcat, cat):
+    """Resolve a (subcat, cat) pair to its source file in the symlinked yamet
+    trees. Returned paths may be plain BED or gzipped; the staging rule
+    handles both."""
+    if cat in ("hmm", "chip", "lad", "pmd"):
+        return op.join(CRC_HG19_CURATED, f"{subcat}.{cat}.bed")
+    if cat == "scna":
+        return op.join(CRC_HG19_WF, f"{subcat}.{cat}.bed")
+    if cat == "cpgIslandExt":
+        return op.join(CRC_HG19_WF, "cpgIslandExt.cpgIslandExt.bed")
+    if cat in ("genes", "lines", "sines"):
+        stem = {"genes": "genes", "lines": "rmsk.lines", "sines": "rmsk.sines"}[cat]
+        return op.join(CRC_HG19_WF, f"{stem}.bed.gz")
+    raise ValueError(f"no yamet source mapping for ({subcat}, {cat})")
 
 
 rule crc_download_accessors:
@@ -201,27 +217,28 @@ rule crc_make_windows_bed:
         """
 
 
-rule crc_make_cgi_bed:
-    """UCSC CpG islands on hg19, whole-genome, stamped with feature_id.
-    Output filename mirrors yamet's {subcat}.{cat}.bed convention so all
-    annotation BEDs share one filename pattern."""
+rule crc_pull_yamet_bed:
+    """Materialise CRC_BEDS/<subcat>.<cat>.bed from the right yamet source
+    (plain BED or .bed.gz). Source mapping in _crc_yamet_bed_path."""
     conda:
         op.join("..", "envs", "bedtools.yml")
+    wildcard_constraints:
+        subcat = _CRC_SUBCAT_RE,
+        cat    = _CRC_CAT_RE,
+    input:
+        bed = lambda w: _crc_yamet_bed_path(w.subcat, w.cat),
     output:
-        bed = op.join(CRC_BEDS, "cpgIslandExt.cpgIslandExt.bed"),
-    params:
-        url = "https://hgdownload.cse.ucsc.edu/goldenpath/hg19/database/cpgIslandExt.txt.gz",
+        bed = op.join(CRC_BEDS, "{subcat}.{cat}.bed"),
     log:
-        op.join(CRC_DATA, "logs", "make_cgi.log"),
+        op.join(CRC_DATA, "logs", "pull_yamet_bed_{subcat}_{cat}.log"),
     shell:
         r"""
         mkdir -p $(dirname {output.bed})
-        curl -sSL {params.url} 2> {log} \
-          | gunzip -c \
-          | awk 'BEGIN{{OFS="\t"; k=0}}
-                 {{if ($2 ~ /^chr(X|Y|M|MT)$/) next;
-                   k++; print $2, $3, $4, "cpgIslandExt_" k}}' \
-          | sort -k1,1 -k2,2n > {output.bed} 2>> {log}
+        if [[ "{input.bed}" == *.gz ]]; then
+            zcat {input.bed} > {output.bed} 2> {log}
+        else
+            cp {input.bed} {output.bed} 2> {log}
+        fi
         """
 
 

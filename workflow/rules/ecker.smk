@@ -37,8 +37,9 @@ ECKER_ANNOTATIONS = {
     "promoters": ["promoters"],
 }
 
-## Annotations whose source BED is built locally. Extend as more are added.
-_ECKER_LOCAL_ANN_NAMES = ["genes"]
+## All annotation BEDs come from results/ecker/mm10/ (symlinked to the shared
+## yamet mm10 tree by setup_barbara_links.sh).
+ECKER_MM10 = op.join(ECKER_DATA, "mm10")
 _ECKER_ALL_ANN_NAMES = sorted({a for cat in ECKER_ANNOTATIONS
                                for a in ECKER_ANNOTATIONS[cat]})
 
@@ -245,29 +246,33 @@ rule ecker_make_windows_bed:
         """
 
 
-rule ecker_make_genes_bed:
-    """Whole-gene loci on mm10, Ensembl chrom naming, stamped with feature_id.
-    Pulls a small UCSC track to avoid a heavyweight GTF dependency."""
+rule ecker_stage_annotation_bed:
+    """Gunzip the source <annotation>.bed.gz from results/ecker/mm10/, strip
+    'chr' prefix, drop MT/X/Y, and stamp each interval with
+    feature_id = <annotation>_<index>."""
     conda:
         op.join("..", "envs", "bedtools.yml")
+    wildcard_constraints:
+        annotation = "|".join(_ECKER_ALL_ANN_NAMES),
+    input:
+        bed = op.join(ECKER_MM10, "{annotation}.bed.gz"),
     output:
-        bed = op.join(ECKER_RUN, "beds", "genes.bed"),
-    params:
-        url = "https://hgdownload.cse.ucsc.edu/goldenpath/mm10/database/refGene.txt.gz",
+        bed = op.join(ECKER_RUN, "beds", "{annotation}.bed"),
     log:
-        op.join(ECKER_RUN, "logs", "make_genes.log"),
+        op.join(ECKER_RUN, "logs", "stage_bed_{annotation}.log"),
     shell:
         r"""
         mkdir -p $(dirname {output.bed})
-        curl -sSL {params.url} 2> {log} \
-          | gunzip -c \
-          | awk 'BEGIN{{OFS="\t"}}
-                 {{ chr=$3; sub(/^chr/, "", chr);
+        echo "[stage_bed] {wildcards.annotation}" > {log}
+        zcat {input.bed} \
+          | awk -v ann={wildcards.annotation} '
+                 BEGIN{{OFS="\t"; k=0}}
+                 {{ chr=$1; sub(/^chr/, "", chr);
                     if (chr ~ /^(X|Y|M|MT)$/) next;
-                    print chr, $5, $6, $13 }}' \
-          | sort -k1,1 -k2,2n -u \
-          | awk 'BEGIN{{OFS="\t"; k=0}} {{k++; print $1, $2, $3, "gene_" k}}' \
-          > {output.bed} 2>> {log}
+                    k++;
+                    print chr, $2, $3, ann "_" k }}' \
+          | sort -k1,1 -k2,2n > {output.bed} 2>> {log}
+        echo "[stage_bed] kept $(wc -l < {output.bed}) intervals" >> {log}
         """
 
 
@@ -432,7 +437,7 @@ def _ecker_combos():
 def list_ecker_features_outputs(wildcards):
     combos = _ecker_combos()
     out = []
-    for ann in _ECKER_LOCAL_ANN_NAMES:
+    for ann in _ECKER_ALL_ANN_NAMES:
         for sr, st in combos:
             out.append(op.join(ECKER_RUN, "features",
                                f"{ann}_{sr}_{st}.cell_feature.tsv.gz"))

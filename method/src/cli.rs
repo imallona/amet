@@ -9,12 +9,12 @@ use std::path::PathBuf;
 pub struct Cli {
     /// Tab-separated manifest with columns cell_id, group, path, plus optional extras.
     /// `format` column overrides per-cell format auto-detection.
-    #[arg(long, value_name = "TSV")]
-    pub cells: PathBuf,
+    #[arg(long, value_name = "TSV", required_unless_present = "build_cpg_only")]
+    pub cells: Option<PathBuf>,
 
     /// BED file of features to score. Features should not overlap.
-    #[arg(long, value_name = "BED")]
-    pub features: PathBuf,
+    #[arg(long, value_name = "BED", required_unless_present = "build_cpg_only")]
+    pub features: Option<PathBuf>,
 
     /// FASTA of the reference genome. amet derives all CpG positions from it on first
     /// use and caches them to <fasta>.cpg next to the input. Subsequent runs reuse the
@@ -28,8 +28,17 @@ pub struct Cli {
     pub cpg_reference: Option<PathBuf>,
 
     /// Output file prefix.
-    #[arg(long, value_name = "PREFIX")]
-    pub output_prefix: PathBuf,
+    #[arg(
+        long,
+        value_name = "PREFIX",
+        required_unless_present = "build_cpg_only"
+    )]
+    pub output_prefix: Option<PathBuf>,
+
+    /// Build the <fasta>.cpg index and exit. Requires --genome. Used by snakemake to
+    /// materialise the cache once before fanning out concurrent scoring jobs.
+    #[arg(long, requires = "genome", conflicts_with = "cpg_reference")]
+    pub build_cpg_only: bool,
 
     /// Manifest column name to use for grouping.
     #[arg(long, default_value = "group")]

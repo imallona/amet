@@ -259,6 +259,7 @@ rule run_amet_on_crc_features:
         cells = op.join(CRC_DATA, "manifests",
                         "{patient}_{location}.tsv"),
         genome = op.join(REFS, "hg19_ucsc", "genome.fa"),
+        cpg = op.join(REFS, "hg19_ucsc", "genome.fa.cpg"),
         bed = op.join(CRC_RUN, "beds", "{subcat}.{cat}.bed"),
     output:
         cell_feature = op.join(
@@ -306,6 +307,7 @@ rule run_amet_on_crc_windows:
         cells = op.join(CRC_DATA, "manifests",
                         "{patient}_{location}.tsv"),
         genome = op.join(REFS, "hg19_ucsc", "genome.fa"),
+        cpg = op.join(REFS, "hg19_ucsc", "genome.fa.cpg"),
         bed = op.join(CRC_RUN, "beds", "windows.bed"),
     output:
         cell_feature = op.join(

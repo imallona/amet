@@ -329,6 +329,7 @@ rule run_amet_on_ecker_features:
                         "{sub_region}_{sub_type}.tsv"),
         cell_files = _ecker_combo_cell_tsvs,
         genome = op.join(REFS, "mm10_ensembl", "genome.fa"),
+        cpg = op.join(REFS, "mm10_ensembl", "genome.fa.cpg"),
         bed = op.join(ECKER_RUN, "beds", "{annotation}.bed"),
     output:
         cell_feature = op.join(
@@ -375,6 +376,7 @@ rule run_amet_on_ecker_windows:
         cells = op.join(ECKER_DATA, "cells.tsv"),
         cell_files = _ecker_all_cell_tsvs,
         genome = op.join(REFS, "mm10_ensembl", "genome.fa"),
+        cpg = op.join(REFS, "mm10_ensembl", "genome.fa.cpg"),
         bed = op.join(ECKER_RUN, "beds", "windows.bed"),
     output:
         cell_feature = op.join(

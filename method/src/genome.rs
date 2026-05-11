@@ -1,6 +1,7 @@
 use crate::error::{AmetError, Result};
 use crate::io::open_read;
-use std::fs::File;
+use fs2::FileExt;
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -11,15 +12,35 @@ pub fn cpg_index_path(fasta: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Ensure a CpG index exists next to the FASTA. Builds it if absent. Returns the index path.
-///
-/// The index format is the same TSV (chrom\t0-based-pos) consumed by [`crate::reference::read_cpg_reference`],
-/// so callers can pass the returned path through unchanged.
+fn cpg_index_lock_path(fasta: &Path) -> PathBuf {
+    let mut s = fasta.as_os_str().to_owned();
+    s.push(".cpg.lock");
+    PathBuf::from(s)
+}
+
+/// Ensure `<fasta>.cpg` exists and return its path. Safe under concurrent calls:
+/// an exclusive flock on `<fasta>.cpg.lock` plus write-to-temp + atomic rename
+/// prevents partial files and duplicate scans.
 pub fn ensure_cpg_index(fasta: &Path) -> Result<PathBuf> {
     let index = cpg_index_path(fasta);
     if index.exists() {
         return Ok(index);
     }
+
+    let lock_path = cpg_index_lock_path(fasta);
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(AmetError::Io)?;
+    lock.lock_exclusive().map_err(AmetError::Io)?;
+
+    if index.exists() {
+        return Ok(index);
+    }
+
     eprintln!(
         "[amet] CpG index not found for {}; scanning FASTA",
         fasta.display()
@@ -29,15 +50,22 @@ pub fn ensure_cpg_index(fasta: &Path) -> Result<PathBuf> {
     Ok(index)
 }
 
-/// Stream a FASTA and write the CpG index TSV.
+/// Stream a FASTA and write the CpG index TSV via sibling temp + atomic rename.
 fn write_cpg_index_from_fasta(fasta: &Path, index: &Path) -> Result<()> {
-    let reader = open_read(fasta)?;
-    let out = File::create(index).map_err(AmetError::Io)?;
-    let mut writer = BufWriter::new(out);
-    scan_fasta(reader, |chrom, pos| {
-        writeln!(writer, "{}\t{}", chrom, pos).map_err(AmetError::Io)
-    })?;
-    writer.flush().map_err(AmetError::Io)?;
+    let parent = index.parent().unwrap_or(Path::new("."));
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".cpg.tmp.")
+        .tempfile_in(parent)
+        .map_err(AmetError::Io)?;
+    {
+        let reader = open_read(fasta)?;
+        let mut writer = BufWriter::new(tmp.as_file_mut());
+        scan_fasta(reader, |chrom, pos| {
+            writeln!(writer, "{}\t{}", chrom, pos).map_err(AmetError::Io)
+        })?;
+        writer.flush().map_err(AmetError::Io)?;
+    }
+    tmp.persist(index).map_err(|e| AmetError::Io(e.error))?;
     Ok(())
 }
 
@@ -186,5 +214,36 @@ mod tests {
         let body = std::fs::read_to_string(&idx).unwrap();
         assert!(body.starts_with("sentinel"));
         std::fs::remove_file(idx).ok();
+    }
+
+    #[test]
+    fn concurrent_ensure_yields_intact_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let fa_path = dir.path().join("g.fa");
+        let mut content = String::new();
+        for c in 0..8 {
+            content.push_str(&format!(">chr{}\n", c));
+            for _ in 0..200 {
+                content.push_str("ACGTACGTACGTACGTACGT\n");
+            }
+        }
+        std::fs::write(&fa_path, &content).unwrap();
+
+        let n_threads = 16;
+        let handles: Vec<_> = (0..n_threads)
+            .map(|_| {
+                let p = fa_path.clone();
+                std::thread::spawn(move || ensure_cpg_index(&p).unwrap())
+            })
+            .collect();
+        for h in handles {
+            let returned = h.join().unwrap();
+            assert_eq!(returned, cpg_index_path(&fa_path));
+        }
+
+        let idx = cpg_index_path(&fa_path);
+        let reference = crate::reference::read_cpg_reference(&idx).unwrap();
+        let total_cpgs: usize = reference.positions.iter().map(|v| v.len()).sum();
+        assert_eq!(total_cpgs, 8000);
     }
 }

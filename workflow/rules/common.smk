@@ -90,6 +90,23 @@ rule fetch_whole_genome_fasta:
         """
 
 
+rule build_cpg_reference:
+    """Pre-build <fasta>.cpg so scoring jobs don't race on first use."""
+    conda:
+        op.join("..", "envs", "rust.yml")
+    input:
+        fa = op.join(REFS, "{source}", "genome.fa"),
+        amet = AMET,
+    output:
+        cpg = op.join(REFS, "{source}", "genome.fa.cpg"),
+    log:
+        op.join(REFS, "{source}", "logs", "build_cpg_reference.log"),
+    shell:
+        """
+        {input.amet} --build-cpg-only --genome {input.fa} &> {log}
+        """
+
+
 rule whole_genome_sizes:
     """Chrom-sizes from a whole-genome FASTA, written as <chr>\\t<len>."""
     conda:

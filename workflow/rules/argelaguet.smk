@@ -235,6 +235,7 @@ rule run_amet_on_argelaguet_features:
         binary = AMET,
         cells = op.join(ARG_DATA, "manifests", "{stage}_{lineage}.tsv"),
         genome = op.join(REFS, "mm10_ucsc", "genome.fa"),
+        cpg = op.join(REFS, "mm10_ucsc", "genome.fa.cpg"),
         bed = op.join(ARG_RUN, "beds", "{annotation}.bed"),
     output:
         cell_feature = op.join(
@@ -281,6 +282,7 @@ rule run_amet_on_argelaguet_windows:
         binary = AMET,
         cells = op.join(ARG_DATA, "cells.tsv"),
         genome = op.join(REFS, "mm10_ucsc", "genome.fa"),
+        cpg = op.join(REFS, "mm10_ucsc", "genome.fa.cpg"),
         bed = op.join(ARG_RUN, "beds", "windows.bed"),
     output:
         cell_feature = op.join(

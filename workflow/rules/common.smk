@@ -54,6 +54,8 @@ rule fetch_chr19_fasta:
     """Pull a single chr19 FASTA. Source decides chrom naming (UCSC = chrN, Ensembl = N)."""
     conda:
         op.join("..", "envs", "bedtools.yml")
+    wildcard_constraints:
+        source = "|".join(CHR19),
     output:
         fa = op.join(REFS, "{source}", "chr19.fa"),
     params:
@@ -75,6 +77,8 @@ rule fetch_whole_genome_fasta:
     reference from this on first use (cached as <fasta>.cpg)."""
     conda:
         op.join("..", "envs", "bedtools.yml")
+    wildcard_constraints:
+        source = "|".join(WHOLE_GENOME_FASTA),
     output:
         fa = op.join(REFS, "{source}", "genome.fa"),
     params:

@@ -194,7 +194,9 @@ rule crc_make_windows_bed:
         r"""
         mkdir -p $(dirname {output.bed})
         bedtools makewindows -g {input.sizes} -w {params.win_size} \
-          | awk 'BEGIN{{OFS="\t"}} {{print $1, $2, $3, "win_"NR}}' \
+          | awk 'BEGIN{{OFS="\t"}}
+                 {{if ($1 ~ /^chr(X|Y|M|MT)$/) next;
+                   print $1, $2, $3, "win_"NR}}' \
           | sort -k1,1 -k2,2n > {output.bed} 2> {log}
         """
 
@@ -217,7 +219,8 @@ rule crc_make_cgi_bed:
         curl -sSL {params.url} 2> {log} \
           | gunzip -c \
           | awk 'BEGIN{{OFS="\t"; k=0}}
-                 {{k++; print $2, $3, $4, "cpgIslandExt_" k}}' \
+                 {{if ($2 ~ /^chr(X|Y|M|MT)$/) next;
+                   k++; print $2, $3, $4, "cpgIslandExt_" k}}' \
           | sort -k1,1 -k2,2n > {output.bed} 2>> {log}
         """
 
@@ -241,7 +244,8 @@ rule crc_stage_annotation_bed:
         r"""
         mkdir -p $(dirname {output.bed})
         awk -v sc={wildcards.subcat} 'BEGIN{{OFS="\t"; k=0}}
-                                       {{k++; print $1, $2, $3, sc "_" k}}' \
+                                       {{if ($1 ~ /^chr(X|Y|M|MT)$/) next;
+                                         k++; print $1, $2, $3, sc "_" k}}' \
           {input.bed} > {output.bed} 2> {log}
         """
 

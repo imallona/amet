@@ -221,12 +221,12 @@ rule ecker_extract_tar:
 
 
 rule ecker_make_windows_bed:
-    """Whole-genome fixed-size windows on mm10. Output is in Ensembl naming
-    (no chr prefix) to match the cells."""
+    """Whole-genome windows from the Ensembl sizes so contig naming (1..19,
+    X, Y, MT) matches the FASTA amet scores against."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
-        sizes = op.join(REFS, "mm10_ucsc", "genome.sizes"),
+        sizes = op.join(REFS, "mm10_ensembl", "genome.sizes"),
     output:
         bed = op.join(ECKER_RUN, "beds", "windows.bed"),
     params:
@@ -237,7 +237,10 @@ rule ecker_make_windows_bed:
         r"""
         mkdir -p $(dirname {output.bed})
         bedtools makewindows -g {input.sizes} -w {params.win_size} \
-          | awk 'BEGIN{{OFS="\t"}} {{sub(/^chr/, "", $1); print $1, $2, $3, "win_"NR}}' \
+          | awk 'BEGIN{{OFS="\t"}}
+                 {{sub(/^chr/, "", $1);
+                   if ($1 ~ /^(X|Y|M|MT)$/) next;
+                   print $1, $2, $3, "win_"NR}}' \
           | sort -k1,1 -k2,2n > {output.bed} 2> {log}
         """
 
@@ -259,7 +262,9 @@ rule ecker_make_genes_bed:
         curl -sSL {params.url} 2> {log} \
           | gunzip -c \
           | awk 'BEGIN{{OFS="\t"}}
-                 {{ chr=$3; sub(/^chr/, "", chr); print chr, $5, $6, $13 }}' \
+                 {{ chr=$3; sub(/^chr/, "", chr);
+                    if (chr ~ /^(X|Y|M|MT)$/) next;
+                    print chr, $5, $6, $13 }}' \
           | sort -k1,1 -k2,2n -u \
           | awk 'BEGIN{{OFS="\t"; k=0}} {{k++; print $1, $2, $3, "gene_" k}}' \
           > {output.bed} 2>> {log}

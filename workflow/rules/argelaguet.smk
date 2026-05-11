@@ -180,6 +180,7 @@ rule argelaguet_filter_annotation_bed:
         $CAT {input.bed} | awk -v ann={wildcards.annotation} '
              BEGIN{{OFS="\t"; k=0}}
              {{ chr=$1; sub(/^chr/, "", chr);
+                if (chr ~ /^(X|Y|M|MT)$/) next;
                 k++;
                 print chr, $2, $3, ann "_" k }}' > {output.bed}
         echo "[filter_bed] kept $(wc -l < {output.bed}) intervals" >> {log}
@@ -200,7 +201,10 @@ rule argelaguet_make_windows:
     shell:
         r"""
         bedtools makewindows -g {input.sizes} -w {params.win_size} \
-          | awk 'BEGIN{{OFS="\t"}} {{sub(/^chr/,"",$1); print $1, $2, $3, "win_"NR}}' \
+          | awk 'BEGIN{{OFS="\t"}}
+                 {{sub(/^chr/,"",$1);
+                   if ($1 ~ /^(X|Y|M|MT)$/) next;
+                   print $1, $2, $3, "win_"NR}}' \
           | sort -k1,1 -k2,2n > {output.bed}
         """
 

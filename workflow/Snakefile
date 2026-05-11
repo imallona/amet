@@ -2,9 +2,9 @@
 ##
 ## Tasks:
 ##   simulations: full validation grid (10 evaluations across 8 simulation scenarios)
-##   argelaguet:  render_argelaguet_report
-##   ecker:       render_ecker_report
-##   crc:         render_crc_report
+##   argelaguet:  argelaguet (renders all argelaguet Rmds)
+##   ecker:       ecker (renders all ecker Rmds)
+##   crc:         crc (renders all crc Rmds)
 
 import os.path as op
 import pandas as pd

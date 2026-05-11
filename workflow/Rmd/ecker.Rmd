@@ -136,35 +136,46 @@ fe_files <- list.files(features_dir,
                        full.names = TRUE)
 fe_files <- fe_files[!grepl("\\.cell_feature\\.tsv\\.gz$", fe_files)]
 
-read_combo_feat <- function(fp, value_kind) {
+## Aggregate per cell at read time so feat_cf collapses from O(cells *
+## features * strata * annotations) rows to O(cells * strata * annotations).
+## Every downstream plot/embedding averages over features per cell.
+read_combo_cf <- function(fp) {
   fn <- basename(fp)
-  base <- sub(paste0("\\.", value_kind, "\\.tsv\\.gz$"), "", fn)
+  base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
   bx <- paste0(base, ".x")
-  ann <- get_annotation(bx); sr <- get_sub_region(bx); st <- get_sub_type(bx)
+  dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
+  agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
+                i_total = mean(i_total, na.rm = TRUE)),
+            by = cell_id]
+  agg[, annotation := get_annotation(bx)]
+  agg[, sub_region := get_sub_region(bx)]
+  agg[, sub_type   := get_sub_type(bx)]
+  agg
+}
+
+read_combo_fe <- function(fp) {
+  fn <- basename(fp)
+  base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
+  bx <- paste0(base, ".x")
   dt <- fread(fp)
-  dt[, annotation := ann]
-  dt[, sub_region := sr]
-  dt[, sub_type   := st]
+  dt[, annotation := get_annotation(bx)]
+  dt[, sub_region := get_sub_region(bx)]
+  dt[, sub_type   := get_sub_type(bx)]
   dt
 }
 
-feat_cf <- rbindlist(lapply(cf_files, read_combo_feat, value_kind = "cell_feature"),
-                    fill = TRUE)
-feat_fe <- rbindlist(lapply(fe_files, read_combo_feat, value_kind = "feature"),
-                    fill = TRUE)
+feat_cf <- rbindlist(lapply(cf_files, read_combo_cf), fill = TRUE)
+feat_fe <- rbindlist(lapply(fe_files, read_combo_fe), fill = TRUE)
 
 cat("loaded", length(cf_files), "cell_feature TSVs and",
     length(fe_files), "feature TSVs from", features_dir, "\n")
 
-## Attach cell-level metadata (cell_class, major_type) by cell_id.
-meta_join <- as.data.table(meta_cells)[, .(cell_id, sub_region, sub_type,
-                                            cell_class = if ("cell_class" %in% names(meta_cells))
-                                                            cell_class else NA_character_,
-                                            major_type = if ("major_type" %in% names(meta_cells))
-                                                            major_type else NA_character_)]
-feat_cf <- merge(feat_cf, meta_join,
-                 by = c("cell_id", "sub_region", "sub_type"),
-                 all.x = TRUE, suffixes = c("", ".meta"))
+## Attach cell_class / major_type per stratum (one row per
+## (sub_region, sub_type), not per cell). Update by reference.
+meta_grp_dt <- as.data.table(meta_grp)[, .(sub_region, sub_type,
+                                            cell_class, major_type)]
+feat_cf[meta_grp_dt, on = .(sub_region, sub_type),
+        `:=`(cell_class = i.cell_class, major_type = i.major_type)]
 ```
 
 <!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue. yamet/ecker.Rmd lines 137-201 (S sample-entropy block: import_sampen, scatter_sampen, violin_sampen, ridges_sampen). -->

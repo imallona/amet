@@ -156,29 +156,30 @@ fe_files <- list.files(features_dir,
                        full.names = TRUE)
 fe_files <- fe_files[!grepl("\\.cell_feature\\.tsv\\.gz$", fe_files)]
 
+## Aggregate per cell at read time: feat_cf collapses from O(cells * features
+## * strata * annotations) rows to O(cells * strata * annotations). Every
+## downstream plot/embedding already averages over features per cell, so no
+## information is lost.
 read_combo_cf <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
-  ann <- get_annotation(paste0(base, ".x"))
-  stg <- get_stage(paste0(base, ".x"))
-  lin <- get_lineage(paste0(base, ".x"))
-  dt <- fread(fp)
-  dt[, annotation := ann]
-  dt[, stage_san := stg]
-  dt[, lineage_san := lin]
-  dt
+  dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
+  agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
+                i_total = mean(i_total, na.rm = TRUE)),
+            by = cell_id]
+  agg[, annotation := get_annotation(paste0(base, ".x"))]
+  agg[, stage_san := get_stage(paste0(base, ".x"))]
+  agg[, lineage_san := get_lineage(paste0(base, ".x"))]
+  agg
 }
 
 read_combo_fe <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
-  ann <- get_annotation(paste0(base, ".x"))
-  stg <- get_stage(paste0(base, ".x"))
-  lin <- get_lineage(paste0(base, ".x"))
   dt <- fread(fp)
-  dt[, annotation := ann]
-  dt[, stage_san := stg]
-  dt[, lineage_san := lin]
+  dt[, annotation := get_annotation(paste0(base, ".x"))]
+  dt[, stage_san := get_stage(paste0(base, ".x"))]
+  dt[, lineage_san := get_lineage(paste0(base, ".x"))]
   dt
 }
 
@@ -188,16 +189,15 @@ feat_fe <- rbindlist(lapply(fe_files, read_combo_fe), fill = TRUE)
 cat("loaded", length(cf_files), "cell_feature TSVs and",
     length(fe_files), "feature TSVs from", features_dir, "\n")
 
-## Attach stage, lineage, lineage_class from manifest, joining on the sanitized
-## stage/lineage that are now columns on the data tables.
-meta_join <- as.data.table(meta_cells)[, .(cell_id,
-                                            stage_san, lineage_san,
-                                            stage, lineage = lineage10x,
-                                            lineage_class = if ("lineage10x_2" %in% names(meta_cells))
-                                                              lineage10x_2 else NA_character_)]
-feat_cf <- merge(feat_cf, meta_join,
-                 by = c("cell_id", "stage_san", "lineage_san"),
-                 all.x = TRUE)
+## Attach stage, lineage, lineage_class by stratum only (one row per
+## (stage_san, lineage_san), not per cell). Update by reference so we don't
+## copy feat_cf.
+meta_grp_dt <- as.data.table(meta_grp)[, .(stage_san, lineage_san,
+                                            stage, lineage, lineage_class)]
+feat_cf[meta_grp_dt, on = .(stage_san, lineage_san),
+        `:=`(stage = i.stage,
+             lineage = i.lineage,
+             lineage_class = i.lineage_class)]
 ```
 
 <!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue. yamet/argelaguet.Rmd lines 148-203 (S sample-entropy block, scatter and violin). -->

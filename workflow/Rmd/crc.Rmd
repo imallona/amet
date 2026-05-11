@@ -65,17 +65,32 @@ get_cat      <- function(fn) sub("^[^_]+_([^_]+)_[^_]+_[^_]+\\..*$", "\\1", fn)
 get_patient  <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$",          "\\1", fn)
 get_location <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",            "\\1", fn)
 
-read_combo_feat <- function(fp, value_kind) {
+## Aggregate per cell at read time: feat_cf goes from O(cells * features
+## * strata) rows to O(cells * strata). Downstream plots average per cell.
+read_combo_cf <- function(fp) {
   fn <- basename(fp)
-  base <- sub(paste0("\\.", value_kind, "\\.tsv\\.gz$"), "", fn)
+  base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
   bx <- paste0(base, ".x")
-  sc <- get_subcat(bx); ct <- get_cat(bx)
-  pt <- get_patient(bx); lc <- get_location(bx)
+  dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
+  agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
+                i_total = mean(i_total, na.rm = TRUE)),
+            by = cell_id]
+  agg[, subcat   := get_subcat(bx)]
+  agg[, cat      := get_cat(bx)]
+  agg[, patient  := get_patient(bx)]
+  agg[, location := get_location(bx)]
+  agg
+}
+
+read_combo_fe <- function(fp) {
+  fn <- basename(fp)
+  base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
+  bx <- paste0(base, ".x")
   dt <- fread(fp)
-  dt[, subcat   := sc]
-  dt[, cat      := ct]
-  dt[, patient  := pt]
-  dt[, location := lc]
+  dt[, subcat   := get_subcat(bx)]
+  dt[, cat      := get_cat(bx)]
+  dt[, patient  := get_patient(bx)]
+  dt[, location := get_location(bx)]
   dt
 }
 
@@ -87,10 +102,8 @@ fe_files <- list.files(params$features_dir,
                        full.names = TRUE)
 fe_files <- fe_files[!grepl("\\.cell_feature\\.tsv\\.gz$", fe_files)]
 
-feat_cf <- rbindlist(lapply(cf_files, read_combo_feat, value_kind = "cell_feature"),
-                    fill = TRUE)
-feat_fe <- rbindlist(lapply(fe_files, read_combo_feat, value_kind = "feature"),
-                    fill = TRUE)
+feat_cf <- rbindlist(lapply(cf_files, read_combo_cf), fill = TRUE)
+feat_fe <- rbindlist(lapply(fe_files, read_combo_fe), fill = TRUE)
 
 cat("loaded", length(cf_files), "cell_feature TSVs and",
     length(fe_files), "feature TSVs from", params$features_dir, "\n")

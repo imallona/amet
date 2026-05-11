@@ -242,12 +242,12 @@ ggplot(df_cells, aes(x = mean_sampen, y = mean_sampen_corrected, color = locatio
 
 Row annotation (rowData) is re-read from the annotation file here because the SCE was built from a partial read in crc_windows.Rmd; the full annotation is loaded and assigned below.
 
-amet's window BED has only (chrom, start, end, feature_id) and so carries no per-window genomic-feature columns. The yamet code reading such an annotation is replaced with a no-op; binarized annotation columns and their downstream plots are not portable.
+amet's window BED has only (chrom, start, end, feature_id) and so carries no per-window genomic-feature columns. The annotation reader is replaced with a no-op; binarized annotation columns and their downstream plots are not portable.
 
 
 ```{r}
-## The annotation merge / binarization pipeline in yamet/crc_windows_sce.Rmd
-## lines 274-318 cannot run on amet's window BED. Save the corrected SCE as-is.
+## The annotation merge / binarization pipeline cannot run on amet's window
+## BED. Save the corrected SCE as-is.
 
 corrected_path <- if (nzchar(params$corrected_sce))
                     params$corrected_sce else
@@ -256,13 +256,13 @@ dir.create(dirname(corrected_path), showWarnings = FALSE, recursive = TRUE)
 saveRDS(windows_sce, corrected_path)
 ```
 
-<!-- Section dropped: yamet/crc_windows_sce.Rmd lines 322-555 build per-cell averages over binarized genomic-feature columns (genes, H3K27me3, SCNAs, HMM states, ...) and contrast up/down DE windows. amet's window BED carries none of these columns, so these plots cannot be reproduced. -->
+<!-- Section dropped: per-cell averages over binarized genomic-feature columns (genes, H3K27me3, SCNAs, HMM states, ...) contrasting up/down DE windows. amet's window BED carries none of these columns, so these plots cannot be reproduced. -->
 
 # Aggregate by rowdata categories
 
-amet's window BED does not provide per-window genomic feature columns, so the aggregation in yamet/crc_windows_sce.Rmd lines 611-792 (per-cell median i_total per genomic category, residual entropy after removing annotation effects) is dropped here.
+amet's window BED does not provide per-window genomic feature columns, so the aggregation (per-cell median i_total per genomic category, residual entropy after removing annotation effects) is dropped here.
 
-<!-- Section dropped: yamet/crc_windows_sce.Rmd lines 611-792 (Aggregate by rowdata categories, per-cell residuals) require binarized rowData annotation columns that amet's window BED does not provide. -->
+<!-- Section dropped: Aggregate by rowdata categories / per-cell residuals require binarized rowData annotation columns that amet's window BED does not provide. -->
 
 ```{r}
 sessionInfo()

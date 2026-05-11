@@ -1,10 +1,8 @@
-"""Subset cells.tsv to one (sub_region, sub_type) combo. Mirrors yamet's
-get_ecker_harmonized_files: filter by sanitized sub_region and sub_type, cap
-at MAX_CELLS by file size.
+"""Subset cells.tsv to one (sub_region, sub_type) combo: filter by sanitized
+sub_region and sub_type, cap at MAX_CELLS by file size.
 
-Sanitization: replace every space with '-' (yamet's _sanitize). Stage
-strings have spaces in yamet's metadata (e.g. "IT-L23 Cux1") so the wildcard
-value is "IT-L23-Cux1".
+Sanitization: replace every space with '-'. Stage strings have spaces in the
+source metadata (e.g. "IT-L23 Cux1") so the wildcard value is "IT-L23-Cux1".
 
 Usage:
     python ecker_subset_manifest.py \

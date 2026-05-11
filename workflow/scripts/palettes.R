@@ -1,4 +1,4 @@
-## Shared color palettes and symbol mappings for all yamet reports.
+## Shared color palettes and symbol mappings for all amet reports.
 ##
 ## Source this file in every Rmd alongside ggtheme.R. All palettes are named
 ## character vectors of hex colors keyed by the display-level name. Using fixed

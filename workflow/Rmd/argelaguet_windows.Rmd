@@ -51,9 +51,9 @@ cat("Lineages:", length(unique(man$lineage10x)), "\n")
 ```
 
 ```{r load_amet_windows}
-## amet's window-scope output replaces yamet's per-window SCE. Two long
-## tables: per-cell-per-window i_total + mean_meth, and per-window-per-group
-## jsd (loaded but not used in this Rmd, kept for symmetry with yamet).
+## amet's window-scope output: two long tables. per-cell-per-window i_total
+## + mean_meth, and per-window-per-group jsd (loaded but not used in this
+## Rmd, kept for symmetry with the per-feature reports).
 win_cf <- fread(params$win_cell_feature)
 win_cf <- merge(win_cf, man[, .(cell_id, stage, lineage10x)],
                 by = "cell_id", all.x = TRUE)
@@ -69,8 +69,8 @@ print(table(win_cf$lineage, useNA = "ifany"))
 ```
 
 ```{r filter_na}
-## yamet's NA filter at the SCE level dropped windows missing in > 30% of
-## cells. The same threshold is applied here on the long table.
+## NA filter: drop windows missing in > 30% of cells. Applied here on the
+## long table.
 n_cells <- uniqueN(win_cf$cell_id)
 win_cov <- win_cf[, .(cov_frac = .N / n_cells), by = feature_id]
 keep_win <- win_cov[cov_frac >= 0.7, feature_id]
@@ -78,7 +78,7 @@ win_cf <- win_cf[feature_id %in% keep_win]
 cat("Windows after NA filter (>= 70% cells covered):", uniqueN(win_cf$feature_id), "\n")
 ```
 
-<!-- Section dropped: amet's i_total is methylation-stable by construction, no per-window meth-correction step is needed (yamet/argelaguet_windows.Rmd lines 86-90, the add_meth_correction call). -->
+<!-- Section dropped: amet's i_total is methylation-stable by construction, so no per-window meth-correction step is needed. -->
 
 # QC
 
@@ -91,7 +91,7 @@ cell_df <- win_cf[, .(
 write.csv(cell_df, "argelaguet_per_cell_summary.csv", row.names = FALSE)
 ```
 
-<!-- Section dropped: amet has no raw S, so the sampen_by_stage chunk (yamet/argelaguet_windows.Rmd lines 107-114) is gone. -->
+<!-- Section dropped: amet has no raw S, so the sampen_by_stage chunk is not reproduced. -->
 
 ```{r itotal_by_stage, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
 ggplot(cell_df, aes(x = stage, y = mean_i_total, fill = stage)) +

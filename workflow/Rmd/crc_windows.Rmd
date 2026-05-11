@@ -81,8 +81,8 @@ knitr::knit_hooks$set(error = function(x, options) {
 To double check annotations are ok. amet's window BED has only feature_id (no per-window genomic-feature columns), so this section is skipped.
 
 ```{r, fig.width = 8, fig.height = 5}
-## yamet had a per-window annotation matrix it could hclust; amet's win_bed is
-## just (chrom, start, end, feature_id). Show the bed shape for sanity.
+## amet's win_bed is just (chrom, start, end, feature_id) with no per-window
+## annotation matrix. Show the bed shape for sanity.
 win_bed <- fread(params$win_bed, header = FALSE,
                  col.names = c("chrom", "start", "end", "feature_id"))
 cat("windows BED:", nrow(win_bed), "rows\n")
@@ -90,11 +90,10 @@ print(head(win_bed))
 ```
 
 ```{r read_shannons}
-## yamet read .det.out.gz files which had a per-window Shannon column plus
-## per-cell sampen columns. amet exports per-feature jsd (feature.tsv.gz) and
-## per-cell-per-feature i_total (cell_feature.tsv.gz). Build the same long
-## `shannons` data.frame plus a per-(patient, location) `sampens_list` of
-## sparse matrices keyed by region = "<chr>:<start>-<end>".
+## amet exports per-feature jsd (feature.tsv.gz) and per-cell-per-feature
+## i_total (cell_feature.tsv.gz). Build a long `shannons` data.frame plus a
+## per-(patient, location) `sampens_list` of sparse matrices keyed by
+## region = "<chr>:<start>-<end>".
 
 get_patient  <- function(fn) sub("^([^_]+)_[^_]+\\..*$", "\\1", fn)
 get_location <- function(fn) sub("^[^_]+_([^_.]+)\\..*$", "\\1", fn)
@@ -381,9 +380,6 @@ for (patient in levels(shannons$patient)) {
 
 ## Original by Atreya
 
-As in  https://github.com/imallona/yamet/blob/857bc788d711b26cd64b8ca4586ca2c3927900c4/workflow/rules/src/crc_stats.Rmd etc.
-
-
 We reread everything from scratch (!); todo streamline.
 
 ```{r}
@@ -625,11 +621,10 @@ Heatmap(top_entropy_cc,
 
 # H vs S driver categorization {.tabset .tabset-pills}
 
-amet exports per-feature `jsd` (across-cell heterogeneity, replacing yamet's
-adjH from `.norm.det.out.gz`). adjS analogue (per-window median i_total) is
-computed from `sampens_list`. Per-annotation R2 cannot be built without a
-per-window annotation matrix, so this section reports only the global
-adjS / jsd long tables.
+amet exports per-feature `jsd` (across-cell heterogeneity). adjS analogue
+(per-window median i_total) is computed from `sampens_list`. Per-annotation
+R2 cannot be built without a per-window annotation matrix, so this section
+reports only the global adjS / jsd long tables.
 
 ```{r read_adj_shannons}
 adj_shannons_long <- shannons %>%
@@ -845,9 +840,9 @@ saveRDS(de, file = 'de_list.rds')
 
 # Plotting {.tabset .tabset-pills}
 
-amet's window BED has no per-window genomic-feature annotation matrix; the UpSetR / Jaccard-graph / pheatmap chunks in yamet/crc_windows.Rmd lines 1248-1438 require that matrix and so are not portable. They are dropped here.
+amet's window BED has no per-window genomic-feature annotation matrix; UpSetR / Jaccard-graph / pheatmap chunks require that matrix and so are not portable. They are dropped here.
 
-<!-- Section dropped: yamet/crc_windows.Rmd lines 1248-1438 (Plotting / Gains and losses of entropy / UpSetR / Graph Jaccards / Pheatmap Jaccards / Up and down-entropic separately / GO) require a per-window annotation matrix that amet does not export. -->
+<!-- Section dropped: Plotting / Gains and losses of entropy / UpSetR / Graph Jaccards / Pheatmap Jaccards / Up and down-entropic separately / GO require a per-window annotation matrix that amet does not export. -->
 
 # Session
 

@@ -1,4 +1,4 @@
-## Shared driver categorization for yamet reports.
+## Shared driver categorization for amet reports.
 ##
 ## Classifies genomic annotations as "across-cell driven", "within-cell driven",
 ## "both", or "neither" based on how much adjH (across-cell heterogeneity) and

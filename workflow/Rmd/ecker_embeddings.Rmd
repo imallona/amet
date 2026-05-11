@@ -59,8 +59,7 @@ N_HVW <- 1000
 N_PCS <- 10
 
 ## Only the methylation-stable amet score (i_total) and methylation are
-## carried forward. Raw S and yamet's adjS variant are dropped because amet
-## does not export them.
+## carried forward; raw S and adjS variants are not exported.
 assay_map <- c(
   "i_total" = "i_total",
   "meth"    = "methylation"
@@ -93,7 +92,7 @@ filter they are never dropped to make a feature block dense.
 
 ```{r load_amet}
 ## amet ships per-cell-per-window i_total and per-cell mean_meth.
-## Build cells x windows matrices, one per assay, in place of yamet's SCE.
+## Build cells x windows matrices, one per assay.
 win_cf <- fread(params$win_cell_feature)
 man <- fread(params$manifest)
 
@@ -220,7 +219,7 @@ write.csv(per_cell_summary, "ecker_per_cell_summary.csv", row.names = FALSE)
 
 ## By cell class {.tabset .tabset-pills}
 
-<!-- Section dropped: amet has no raw S, so the win_cc_S chunk (yamet/ecker_embeddings.Rmd lines 206-215) is gone. -->
+<!-- Section dropped: amet has no raw S, so the win_cc_S chunk is not reproduced. -->
 
 ```{r win_cc_i_total, fig.width = ng_fig_size(2, 1, panel_mm = 60)$w, fig.height = ng_fig_size(2, 1, panel_mm = 60)$h}
 ### i_total

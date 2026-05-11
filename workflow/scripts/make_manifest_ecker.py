@@ -30,8 +30,8 @@ meta = pd.read_csv(args.meta, sep="\t", compression="gzip")
 print(f"[manifest] meta rows: {len(meta)}")
 
 # Region filter (e.g. MOp). Exact-match against sub_region (the cortical
-# area) — yamet's substring match could mis-grab cells from MOpUL/MOp2/etc.
-# Atlas-dissection slabs (region = 2C/3C/4B/5D) are not used for filtering.
+# area) to avoid mis-grabbing cells from MOpUL/MOp2/etc. Atlas-dissection
+# slabs (region = 2C/3C/4B/5D) are not used for filtering.
 if "sub_region" in meta.columns and args.region:
     meta = meta[meta["sub_region"].astype(str) == args.region]
     print(f"[manifest] after sub_region == {args.region}: {len(meta)}")
@@ -70,8 +70,8 @@ out = pd.DataFrame({
     "path": meta["basename"].apply(cell_path).apply(op.abspath),
     "format": "allc",
 })
-## Keep yamet's column names: sub_type and sub_region must both be available
-## as separate keys (the wildcard names {sub_region, sub_type} read these).
+## sub_type and sub_region must both be available as separate keys (the
+## wildcard names {sub_region, sub_type} read these).
 for c in ("sub_type", "cell_class", "major_type", "region", "sub_region", "plate"):
     if c in meta.columns:
         out[c] = meta[c].astype(str).values

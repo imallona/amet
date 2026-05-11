@@ -93,7 +93,7 @@ harmonize_levels <- function(df) {
   df
 }
 
-## yamet's _sanitize for Ecker is gsub(" ", "-", x). Match exactly.
+## _sanitize for Ecker: gsub(" ", "-", x).
 sanitize <- function(x) gsub(" ", "-", x)
 ```
 
@@ -124,9 +124,8 @@ cat("cell_class levels:", paste(sort(unique(meta_grp$cell_class)), collapse = ",
 ```
 
 ```{r load_amet}
-## amet emits one TSV pair per (annotation, sub_region, sub_type), mirroring
-## yamet's per-stratum runs. Enumerate, parse the wildcard values from
-## filenames, concatenate.
+## amet emits one TSV pair per (annotation, sub_region, sub_type) stratum.
+## Enumerate, parse the wildcard values from filenames, concatenate.
 features_dir <- params$features_dir
 cf_files <- list.files(features_dir,
                        pattern = "\\.cell_feature\\.tsv\\.gz$",
@@ -178,7 +177,7 @@ feat_cf[meta_grp_dt, on = .(sub_region, sub_type),
         `:=`(cell_class = i.cell_class, major_type = i.major_type)]
 ```
 
-<!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue. yamet/ecker.Rmd lines 137-201 (S sample-entropy block: import_sampen, scatter_sampen, violin_sampen, ridges_sampen). -->
+<!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue, so the S sample-entropy block (import_sampen, scatter_sampen, violin_sampen, ridges_sampen) is not reproduced. -->
 
 # adjS - methylation-adjusted sample entropy {.tabset .tabset-pills}
 
@@ -230,7 +229,7 @@ ggplot(adjsampens %>% filter(!is.na(cell_class)),
   theme(legend.position = "none")
 ```
 
-<!-- Section dropped: amet ships only methylation-stable jsd, no raw Shannon entropy analogue. yamet/ecker.Rmd lines 270-311 (H Shannon-entropy median block: import_shannon, scatter_shannon). -->
+<!-- Section dropped: amet ships only methylation-stable jsd, no raw Shannon entropy analogue, so the H Shannon-entropy median block (import_shannon, scatter_shannon) is not reproduced. -->
 
 # adjH (methylation-normalised Shannon entropy) - medians {.tabset .tabset-pills}
 
@@ -238,9 +237,8 @@ Per-feature jsd from amet's feature TSV (amet `jsd`, the multi-distribution
 Jensen-Shannon divergence across cells in a group).
 
 ```{r import_adjH}
-## yamet's adjshannons holds one median per (annotation, sub_region, sub_type)
-## (yamet/ecker.Rmd 313-339). Aggregate amet's per-feature jsd to the same
-## shape so the downstream group_medians join doesn't explode.
+## Aggregate amet's per-feature jsd to one median per (annotation,
+## sub_region, sub_type) so the downstream group_medians join doesn't explode.
 adjshannons <- as.data.frame(
   as.data.table(feat_fe)[
     , .(median_shannon  = median(jsd, na.rm = TRUE),
@@ -340,7 +338,7 @@ if (nrow(df_cmp) > 0) {
 }
 ```
 
-<!-- Section dropped: amet has no raw S/H, so the S vs H scatter (yamet/ecker.Rmd lines 439-451) is gone. -->
+<!-- Section dropped: amet has no raw S/H, so the S vs H scatter is not reproduced. -->
 
 # Variation across cell types {.tabset .tabset-pills}
 
@@ -476,9 +474,9 @@ make_heatmap(heat_df_adjh, "median_adjH", "median jsd",
              palette = c("navy", "white", "firebrick"))
 ```
 
-<!-- Section dropped: amet has no raw S, so the median S heatmap (yamet/ecker.Rmd lines 587-596) is gone. -->
+<!-- Section dropped: amet has no raw S, so the median S heatmap is not reproduced. -->
 
-<!-- Section dropped: amet does not export per-locus entropy vectors per group, so the locus-level H distributions block (yamet/ecker.Rmd lines 598-688) is gone. Per-feature jsd is already plotted above. -->
+<!-- Section dropped: amet does not export per-locus entropy vectors per group, so the locus-level H distributions block is not reproduced. Per-feature jsd is already plotted above. -->
 
 # UMAP: cell-type separability {.tabset .tabset-pills}
 
@@ -506,8 +504,8 @@ plot_umap_class <- function(df, title, subtitle = NULL) {
 ## Cell-level: adjS across annotations
 
 ```{r cell_umap_load}
-## amet's per-cell-per-feature i_total replaces yamet's per-cell sampen_norm.
-## Build the same wide cells x annotation matrix used downstream.
+## Build a wide cells x annotation matrix from amet's per-cell-per-feature
+## i_total.
 cells_adjS_long <- as.data.frame(feat_cf)[, c("cell_id", "sub_region",
                                                "sub_type", "annotation",
                                                "i_total")] %>%
@@ -573,7 +571,7 @@ plot_umap_class(umap_cell_meth,
                 subtitle = "per-cell avg. methylation per annotation as feature vector")
 ```
 
-<!-- Section dropped: amet has no raw S, so the S-with-meth-regressed-out UMAP (yamet/ecker.Rmd lines 788-839) is gone. -->
+<!-- Section dropped: amet has no raw S, so the S-with-meth-regressed-out UMAP is not reproduced. -->
 
 ## Group-level: adjH across annotations
 
@@ -611,9 +609,9 @@ plot_umap_class(umap_grp_meth,
                 subtitle = "median avg. methylation per annotation as feature vector")
 ```
 
-<!-- Section dropped: per-locus gene-level UMAP from .norm.det.out.gz (yamet/ecker.Rmd lines 877-965). amet does not export per-locus jsd vectors per group; only per-feature jsd is available, which is already plotted above. -->
+<!-- Section dropped: per-locus gene-level UMAP from .norm.det.out.gz is not reproduced. amet does not export per-locus jsd vectors per group; only per-feature jsd is available, which is already plotted above. -->
 
-<!-- Section dropped: paper UMAP overlay (yamet/ecker.Rmd lines 967-1105). amet's manifest does not carry the Ecker paper's L1UMAP coordinates or MajorRegion; revisit if those columns are wired through compose_ecker_metadata.py. -->
+<!-- Section dropped: paper UMAP overlay is not reproduced. amet's manifest does not carry the Ecker paper's L1UMAP coordinates or MajorRegion; revisit if those columns are wired through compose_ecker_metadata.py. -->
 
 # Session
 

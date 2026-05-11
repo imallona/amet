@@ -1,7 +1,7 @@
 ## Plotting theme: square panels, no grid lines, black borders.
 ## Used across all evaluation scripts and Rmd reports.
-## theme_ng matches yamet's rules/src/ggtheme.R verbatim (45-degree x-axis text);
-## ng_fig_size and save_ng are also ported for the Rmd verbatim port.
+## theme_ng provides a 45-degree x-axis text variant; ng_fig_size and save_ng
+## are shared helpers used by the Rmd reports.
 
 suppressPackageStartupMessages({
     library(ggplot2)

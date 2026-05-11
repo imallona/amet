@@ -13,9 +13,9 @@ Two acquisition paths:
   (a) rsync_from_barbara: rsync the raw originals already present on barbara
       into results/crc/raw/. This is the normal path while we have access to
       the existing copy.
-  (b) download_from_geo: cold-start path mirroring yamet's GEO rules. Pulls
-      the GSM list from SRA (esearch + efetch) and per-sample directories
-      from GEO. Used when starting from scratch with no barbara mirror.
+  (b) download_from_geo: cold-start path. Pulls the GSM list from SRA
+      (esearch + efetch) and per-sample directories from GEO. Used when
+      starting from scratch with no barbara mirror.
 
 Both paths populate the same results/crc/raw/ directory; the manifest rule
 reads whatever is there.
@@ -27,13 +27,12 @@ CRC_BEDS = op.join(CRC_DATA, "beds")
 CRC_RUN = op.join(RESULTS, config["crc"]["run_name"])
 CRC_RUN_NAME = config["crc"]["run_name"]
 
-## yamet's CRC ANNOTATIONS dict (rules/crc.smk in yamet). Keys: cat (outer),
-## values: list of subcats (inner). Wildcards mirror yamet exactly:
-## {subcat}_{cat}_{patient}_{location}.
+## CRC annotations dict. Keys: cat (outer), values: list of subcats (inner).
+## Wildcards: {subcat}_{cat}_{patient}_{location}.
 ##
 ## Locally we only have cpgIslandExt (downloaded from UCSC). The rest live on
 ## barbara as bed files; they get pulled in when running there. The dict keeps
-## yamet's full surface so rules referencing wildcard combos remain stable.
+## the full surface so rules referencing wildcard combos remain stable.
 CRC_ANNOTATIONS = {
     "pmd":          ["pmds", "hmds"],
     "hmm": [
@@ -60,14 +59,14 @@ _CRC_ALL_PAIRS   = [(sc, c) for c, subs in CRC_ANNOTATIONS.items() for sc in sub
 _CRC_SUBCAT_RE = "|".join(sorted({sc for sc, _ in _CRC_ALL_PAIRS}))
 _CRC_CAT_RE    = "|".join(sorted({c  for _, c  in _CRC_ALL_PAIRS}))
 
-## yamet hg19 trees. Both symlinked in by setup_barbara_links.sh:
-##   hg19         = yamet/workflow/hg19 (cpgIslandExt, SCNAs, genes/lines/sines.bed.gz)
-##   hg19_curated = yamet/hg19          (chromHMM, ChIP, lamin, PMD as plain .bed)
+## hg19 BED trees. Both symlinked in by setup_barbara_links.sh:
+##   hg19         (cpgIslandExt, SCNAs, genes/lines/sines.bed.gz)
+##   hg19_curated (chromHMM, ChIP, lamin, PMD as plain .bed)
 CRC_HG19_WF      = op.join(CRC_DATA, "hg19")
 CRC_HG19_CURATED = op.join(CRC_DATA, "hg19_curated")
 
 def _crc_yamet_bed_path(subcat, cat):
-    """Resolve a (subcat, cat) pair to its source file in the symlinked yamet
+    """Resolve a (subcat, cat) pair to its source file in the symlinked BED
     trees. Returned paths may be plain BED or gzipped; the staging rule
     handles both."""
     if cat in ("hmm", "chip", "lad", "pmd"):
@@ -79,7 +78,7 @@ def _crc_yamet_bed_path(subcat, cat):
     if cat in ("genes", "lines", "sines"):
         stem = {"genes": "genes", "lines": "rmsk.lines", "sines": "rmsk.sines"}[cat]
         return op.join(CRC_HG19_WF, f"{stem}.bed.gz")
-    raise ValueError(f"no yamet source mapping for ({subcat}, {cat})")
+    raise ValueError(f"no source mapping for ({subcat}, {cat})")
 
 
 rule crc_download_accessors:
@@ -170,8 +169,7 @@ checkpoint crc_make_manifest:
 
 
 rule crc_per_combo_manifest:
-    """Sub-manifest for one (patient, location) combo. Mirrors yamet's
-    get_harmonized_files."""
+    """Sub-manifest for one (patient, location) combo."""
     conda:
         op.join("..", "envs", "python.yml")
     input:
@@ -218,7 +216,7 @@ rule crc_make_windows_bed:
 
 
 rule crc_pull_yamet_bed:
-    """Materialise CRC_BEDS/<subcat>.<cat>.bed from the right yamet source
+    """Materialise CRC_BEDS/<subcat>.<cat>.bed from the right BED source
     (plain BED or .bed.gz). Source mapping in _crc_yamet_bed_path."""
     conda:
         op.join("..", "envs", "bedtools.yml")
@@ -244,8 +242,8 @@ rule crc_pull_yamet_bed:
 
 rule crc_stage_annotation_bed:
     """Stage one annotation BED (already in CRC_BEDS as <subcat>.<cat>.bed)
-    into CRC_RUN with feature_id = <subcat>_<index>. Mirrors yamet's
-    {subcat}.{cat}.bed naming. Whole-genome, no chr restriction."""
+    into CRC_RUN with feature_id = <subcat>_<index>. Filename convention:
+    {subcat}.{cat}.bed. Whole-genome, no chr restriction."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     wildcard_constraints:
@@ -268,8 +266,7 @@ rule crc_stage_annotation_bed:
 
 
 rule run_amet_on_crc_features:
-    """Run amet on one (subcat, cat, patient, location) combo. Mirrors
-    yamet's run_yamet_on_separate_features wildcards exactly."""
+    """Run amet on one (subcat, cat, patient, location) combo."""
     wildcard_constraints:
         subcat = _CRC_SUBCAT_RE,
         cat    = _CRC_CAT_RE,
@@ -319,8 +316,7 @@ rule run_amet_on_crc_features:
 
 rule run_amet_on_crc_windows:
     """Run amet on whole-genome windows for one (patient, location) combo.
-    Mirrors yamet's run_yamet_on_crc_windows wildcards (collapsed
-    win_size to a single hard-coded value)."""
+    win_size is collapsed to a single hard-coded value."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:

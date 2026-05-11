@@ -350,10 +350,10 @@ pF <- ggplot(df_long_de, aes(x = contrast, y = count + 1, fill = direction)) +
 ```
 
 ```{r fc-panel-g}
-## amet's window BED has no per-window genomic-feature columns. yamet's panel G
-## (annotation overlap dotplot) cannot be built; render an empty placeholder
-## panel keyed off prop_df = NULL so the assembled figure layout below still
-## works.
+## amet's window BED has no per-window genomic-feature columns, so the
+## panel G annotation-overlap dotplot cannot be built. Render an empty
+## placeholder panel keyed off prop_df = NULL so the assembled figure
+## layout below still works.
 prop_df <- data.frame(annotation = character(), contrast_dir = character(),
                       proportion = numeric())
 write.csv(prop_df, "crc_de_annotation_overlap.csv", row.names = FALSE)

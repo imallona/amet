@@ -55,10 +55,10 @@ opts_chunk$set(
 )
 ```
 
-These are amet feature TSVs (per (subcat, cat, patient, location) combo). Per-cell `i_total` from cell_feature.tsv.gz replaces yamet's per-cell sampen_norm; per-feature `jsd` from feature.tsv.gz replaces yamet's per-group adjH.
+These are amet feature TSVs (per (subcat, cat, patient, location) combo). Per-cell `i_total` from cell_feature.tsv.gz captures within-cell heterogeneity; per-feature `jsd` from feature.tsv.gz captures across-cell heterogeneity.
 
 ```{r, import_short_reports}
-## Filename parsers (mirror yamet/crc.Rmd):
+## Filename parsers:
 ##   feat: <subcat>_<cat>_<patient>_<location>.{cell_feature,feature}.tsv.gz
 get_subcat   <- function(fn) sub("^([^_]+)_[^_]+_[^_]+_[^_]+\\..*$", "\\1", fn)
 get_cat      <- function(fn) sub("^[^_]+_([^_]+)_[^_]+_[^_]+\\..*$", "\\1", fn)
@@ -108,10 +108,10 @@ feat_fe <- rbindlist(lapply(fe_files, read_combo_fe), fill = TRUE)
 cat("loaded", length(cf_files), "cell_feature TSVs and",
     length(fe_files), "feature TSVs from", params$features_dir, "\n")
 
-## yamet's `files` long table holds one row per (cell, annotation, patient,
-## location) with columns sampen + avg_meth. Rebuild from amet's per-cell
+## Long table `files` holds one row per (cell, annotation, patient,
+## location) with columns sampen + avg_meth, built from amet's per-cell
 ## i_total (renamed to sampen) and mean_meth (renamed to avg_meth) so the
-## downstream chunks copy verbatim from yamet.
+## downstream chunks can use those column names directly.
 files <- as.data.frame(feat_cf)
 files$annotation <- files$subcat
 files$sampen     <- files$i_total
@@ -175,16 +175,14 @@ table(files$annotation, useNA = 'always')
 
 ```
 
-<!-- Section dropped: amet ships only methylation-stable i_total; the raw sampen scatter and per-patient/per-location plots in yamet/crc.Rmd lines 215-417 (Bulk unnormalized sampen tabset) are gone. -->
+<!-- Section dropped: amet ships only methylation-stable i_total; the raw sampen scatter and per-patient/per-location plots (Bulk unnormalized sampen tabset) are not reproduced. -->
 
 # adjS - methylation-adjusted sample entropy {.tabset .tabset-pills}
 
 That is, not by locus but by cell norm sampEns (i_total) (that are calculated according to some regionset anyway). amet's i_total is the single per-cell-per-feature within-cell mutual information score; the same data already loaded above are used here directly.
 
 ```{r, import_short_reports_norm}
-## In yamet there is a separate read pass for the sampen_norm column. amet's
-## i_total is that score, already in `files`, so just reuse the same data
-## frame here.
+## i_total is already in `files`, so reuse the same data frame here.
 ```
 
 ## Scatters by location and annotation
@@ -410,11 +408,11 @@ adjsampens %>%
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 ```
 
-<!-- Section dropped: amet has no raw Shannon entropy. yamet/crc.Rmd lines 694-804 (Unnormalized Shannon's MEDIANS DOWNSAMPLED tabset) is gone. -->
+<!-- Section dropped: amet has no raw Shannon entropy, so the Unnormalized Shannon's MEDIANS DOWNSAMPLED tabset is not reproduced. -->
 
 # Meth-normalized Shannons (the amet way) MEDIANS {.tabset .tabset-pills}
 
-amet's per-feature `jsd` from feature.tsv.gz replaces yamet's per-group adjH from `.norm.det.out.gz`. yamet's adjshannons holds one row per (annotation, patient, location); amet's feature TSV has many rows per group, so aggregate to the same shape with `median(jsd)`.
+amet's per-feature `jsd` from feature.tsv.gz captures across-cell heterogeneity. amet's feature TSV has many rows per group, so aggregate to one row per (annotation, patient, location) with `median(jsd)`.
 
 ```{r, eval = TRUE}
 adjshannons <- as.data.frame(
@@ -590,7 +588,7 @@ ggplot(
 
 ```
 
-<!-- Section dropped: amet has no raw Shannon entropy / unnormalized sampen, so the second scatter (sampens vs shannons) in yamet/crc.Rmd lines 1019-1039 is gone. -->
+<!-- Section dropped: amet has no raw Shannon entropy / unnormalized sampen, so the second scatter (sampens vs shannons) is not reproduced. -->
 
 ```{r}
 variation <- adj_df %>%

@@ -15,9 +15,9 @@ Two acquisition paths:
 
   (a) rsync_from_barbara: pull raw .tar files already present on barbara into
       results/ecker/raw/ and extract per-cell tsv.gz into results/ecker/cells/.
-  (b) download_from_nemo: cold-start path mirroring yamet's download chain.
-      Pulls metadata (NeMo TSV + paper xlsx supplement), derives the per-tar
-      URL list, then wget-downloads tars into results/ecker/raw/.
+  (b) download_from_nemo: cold-start path. Pulls metadata (NeMo TSV + paper
+      xlsx supplement), derives the per-tar URL list, then wget-downloads
+      tars into results/ecker/raw/.
 """
 
 ECKER_DATA = op.join(RESULTS, "ecker")
@@ -26,9 +26,8 @@ ECKER_CELLS = op.join(ECKER_DATA, "cells")
 ECKER_RUN = op.join(RESULTS, config["ecker"]["run_name"])
 ECKER_RUN_NAME = config["ecker"]["run_name"]
 
-## yamet's nested ECKER_ANNOTATIONS dict (rules/ecker.smk in yamet). Annotation
-## name == wildcard {annotation}; outer key is unused at the wildcard level
-## (kept for parity).
+## Ecker annotations dict. Annotation name == wildcard {annotation}; outer
+## key is unused at the wildcard level.
 ECKER_ANNOTATIONS = {
     "chip":      ["h3k4me3", "h3k9me3", "h3k27me3", "h3k4me1", "h3k27ac"],
     "genes":     ["genes"],
@@ -37,8 +36,8 @@ ECKER_ANNOTATIONS = {
     "promoters": ["promoters"],
 }
 
-## All annotation BEDs come from results/ecker/mm10/ (symlinked to the shared
-## yamet mm10 tree by setup_barbara_links.sh).
+## All annotation BEDs come from results/ecker/mm10/ (symlinked to a shared
+## mm10 tree by setup_barbara_links.sh).
 ECKER_MM10 = op.join(ECKER_DATA, "mm10")
 _ECKER_ALL_ANN_NAMES = sorted({a for cat in ECKER_ANNOTATIONS
                                for a in ECKER_ANNOTATIONS[cat]})
@@ -286,8 +285,7 @@ def _ecker_all_cell_tsvs(wildcards):
 
 
 rule ecker_per_combo_manifest:
-    """Sub-manifest for one (sub_region, sub_type) combo. Mirrors yamet's
-    get_ecker_harmonized_files."""
+    """Sub-manifest for one (sub_region, sub_type) combo."""
     conda:
         op.join("..", "envs", "python.yml")
     input:
@@ -327,8 +325,7 @@ def _ecker_combo_cell_tsvs(wildcards):
 
 
 rule run_amet_on_ecker_features:
-    """Run amet on one (annotation, sub_region, sub_type) combo. Mirrors
-    yamet's run_yamet_on_ecker_features wildcards exactly."""
+    """Run amet on one (annotation, sub_region, sub_type) combo."""
     wildcard_constraints:
         annotation = "|".join(_ECKER_ALL_ANN_NAMES),
     conda:
@@ -377,8 +374,7 @@ rule run_amet_on_ecker_features:
 
 
 rule run_amet_on_ecker_windows:
-    """Run amet on whole-genome windows over all cells (no per-stratum wildcards).
-    Mirrors yamet's run_yamet_on_ecker_windows."""
+    """Run amet on whole-genome windows over all cells (no per-stratum wildcards)."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:

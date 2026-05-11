@@ -24,9 +24,8 @@ ARG_MM10_DIR = op.join(ARG_DATA, "mm10")
 ARG_RUN_NAME = config["argelaguet"]["run_name"]
 ARG_RUN = op.join(RESULTS, ARG_RUN_NAME)
 
-## Annotation set mirrors yamet's nested ARGELAGUET_ANNOTATIONS dict
-## (yamet/rules/argelaguet.smk). Outer key = category, inner key = annotation
-## name; the annotation name is the wildcard that yamet uses ({annotation}).
+## Annotation set: outer key = category, inner key = annotation name; the
+## annotation name is the {annotation} wildcard.
 _ARGELAGUET_MM10_ANNOTATIONS = {
     "chip":      ["h3k4me3", "h3k9me3", "h3k27me3", "h3k4me1", "h3k27ac"],
     "genes":     ["genes"],
@@ -36,7 +35,7 @@ _ARGELAGUET_MM10_ANNOTATIONS = {
 }
 
 ## Gastrulation-specific source filenames inside the scnmt_gastrulation
-## features tarball. Keys are yamet's sanitized annotation wildcard values.
+## features tarball. Keys are sanitized annotation wildcard values.
 _ARGELAGUET_GASTRO_BEDS = {
     "enh-E75-Ect":        "H3K27ac_distal_E7.5_Ect_intersect12.bed",
     "enh-E75-End":        "H3K27ac_distal_E7.5_End_intersect12.bed",
@@ -116,8 +115,7 @@ checkpoint make_argelaguet_manifest:
 
 rule argelaguet_per_combo_manifest:
     """Subset cells.tsv to one (sanitized stage, sanitized lineage) pair.
-    Mirrors yamet's get_argelaguet_harmonized_files plate-stratified
-    top-N-by-coverage selection."""
+    Plate-stratified top-N-by-coverage selection."""
     conda:
         op.join("..", "envs", "python.yml")
     input:
@@ -145,7 +143,7 @@ def _argelaguet_bed_source(wildcards):
 
     mm10 annotations come from results/argelaguet/mm10/<ann>.bed.gz;
     gastrulation-specific annotations come from
-    results/argelaguet/features/<filename> per yamet's _ARGELAGUET_GASTRO_BEDS
+    results/argelaguet/features/<filename> per the _ARGELAGUET_GASTRO_BEDS
     map.
     """
     if wildcards.annotation in _MM10_ANN_NAMES:
@@ -156,8 +154,7 @@ def _argelaguet_bed_source(wildcards):
 
 rule argelaguet_filter_annotation_bed:
     """Stage one annotation BED: gunzip if needed, strip 'chr' prefix, and
-    stamp each peak with feature_id = <annotation>_<index>. Whole-genome,
-    matching yamet's ARGELAGUET_CHR10_ONLY = False default."""
+    stamp each peak with feature_id = <annotation>_<index>. Whole-genome."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     wildcard_constraints:
@@ -228,9 +225,9 @@ rule chr19_sizes:
 
 
 rule run_amet_on_argelaguet_features:
-    """Run amet on one (annotation, stage, lineage) combo. Mirrors yamet's
-    run_yamet_on_argelaguet_features wildcards: {annotation, stage, lineage},
-    where stage and lineage are sanitized strings (gsub '[ ._]' '-')."""
+    """Run amet on one (annotation, stage, lineage) combo. Wildcards:
+    {annotation, stage, lineage}, where stage and lineage are sanitized
+    strings (gsub '[ ._]' '-')."""
     wildcard_constraints:
         annotation = "|".join(_ALL_ARGELAGUET_ANN_NAMES),
     conda:
@@ -277,9 +274,8 @@ rule run_amet_on_argelaguet_features:
 
 
 rule run_amet_on_argelaguet_windows:
-    """Run amet over all cells on chr19 windows. Mirrors yamet's
-    run_yamet_on_argelaguet_windows: one big run, all cells, no stratum
-    wildcard."""
+    """Run amet over all cells on chr19 windows: one big run, all cells,
+    no stratum wildcard."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
@@ -320,8 +316,7 @@ rule run_amet_on_argelaguet_windows:
 
 def _argelaguet_combos():
     """Read cells.tsv after the manifest checkpoint and return sorted unique
-    (sanitized stage, sanitized lineage) pairs that have at least one cell.
-    Mirrors yamet's iteration over distinct (stage_san, lineage_san) groups."""
+    (sanitized stage, sanitized lineage) pairs that have at least one cell."""
     import csv
     import re
 

@@ -66,7 +66,7 @@ if (!is.null(ve_long)) {
 }
 ```
 
-<!-- Section dropped: paper UMAP overlay (yamet/fig_ecker.Rmd lines 66-75 paper-umap-data; lines 184-221 fe-panel-b-v2). amet's manifest does not carry the Ecker paper L1UMAP coordinates, so umap_cells cannot be reconstructed from ecker_paper_umap_overlay.rds. -->
+<!-- Section dropped: paper UMAP overlay (paper-umap-data, fe-panel-b-v2) is not reproduced. amet's manifest does not carry the Ecker paper L1UMAP coordinates, so umap_cells cannot be reconstructed from ecker_paper_umap_overlay.rds. -->
 
 # Half-A4 compact figure (primary)
 
@@ -446,7 +446,7 @@ draw(ht_full)
 invisible(dev.off())
 ```
 
-<!-- Note: legacy panels pa-pd from yamet/fig_ecker.Rmd lines 488-511 (paper-UMAP overlays of cell_class, adjS, adjH, meth) are dropped because amet does not provide paper UMAP coords. The remaining pe-ph (IQR, R^2, windows UMAP, drivers) are kept below. -->
+<!-- Note: legacy paper-UMAP overlay panels (pa-pd: cell_class, adjS, adjH, meth) are dropped because amet does not provide paper UMAP coords. The remaining pe-ph (IQR, R^2, windows UMAP, drivers) are kept below. -->
 
 # Legacy panels (kept for reference)
 

@@ -71,8 +71,8 @@ write.csv(summary_table, "crc_diffentropy_counts.csv", row.names = FALSE)
 
 ```{r prop-df}
 ## amet's window BED has only (chrom, start, end, feature_id) columns; no
-## per-window genomic-feature annotation matrix is exported. yamet's panel B
-## requires that matrix; render an empty placeholder.
+## per-window genomic-feature annotation matrix is exported. Panel B requires
+## that matrix, so render an empty placeholder.
 prop_df <- data.frame(annotation = character(), contrast = character(),
                       direction = character(), proportion = numeric())
 write.csv(prop_df, "crc_diffentropy_annotation_overlap.csv", row.names = FALSE)
@@ -90,7 +90,7 @@ pb <- ggplot() +
 ```
 
 ```{r panel-c}
-## Panel C in yamet groups windows by binarized rowData annotations on the SCE.
+## Panel C groups windows by binarized rowData annotations on the SCE.
 ## amet's window BED has none of those columns; render a placeholder.
 pc <- ggplot() +
   annotate("text", x = 0.5, y = 0.5,

@@ -70,11 +70,11 @@ Two complementary feature spaces are compared for cell embedding:
    dimensional, spatially resolved). HVW selection applied before PCA and UMAP.
 2. **Per-annotation**: amet's window BED carries no per-window annotation columns,
    so the per-annotation feature space and per-annotation HVW -> PCA -> UMAP loop
-   from yamet/crc_embeddings.Rmd lines 347-583 are dropped here.
+   are dropped here.
 
 amet exports only `i_total` (within-cell mutual information across CpG lags) and
-methylation. Raw S and the cell-level S_cellmeth correction from yamet are not
-portable because amet has no raw sampen analogue.
+methylation. There is no raw sampen analogue, so any cell-level S_cellmeth
+correction is not available.
 
 ```{r constants}
 loc_levels <- c("NC", "PT", "LN", "ML", "MP", "MO")
@@ -102,7 +102,7 @@ windows_sce <- windows_sce[na_frac < 0.3, ]
 cat("Windows after NA filter:", nrow(windows_sce), "\n")
 ```
 
-<!-- Section dropped: yamet's S_cellmeth assay (cell-mean-meth regressed out from raw S, yamet/crc_embeddings.Rmd lines 115-136) requires a raw sampen assay that amet does not export. -->
+<!-- Section dropped: S_cellmeth assay (cell-mean-meth regressed out from raw S) requires a raw sampen assay that amet does not export. -->
 
 # Shared helpers
 
@@ -138,7 +138,7 @@ plot_pair <- function(coords, sce_obj, title_prefix) {
 
 ## Named list mapping assay names to display labels. amet exports only
 ## i_total (sampen), the meth-corrected i_total (sampen_corrected, "adjS"),
-## and methylation. Raw S and S_cellmeth from yamet are not available.
+## and methylation. Raw S and S_cellmeth are not available.
 assay_map <- c(
   "sampen"           = "i_total",
   "sampen_corrected" = "adjS",
@@ -205,7 +205,7 @@ if (!is.null(win_embeds[["i_total"]])) print(plot_pair(win_embeds[["i_total"]]$u
 if (!is.null(win_embeds[["adjS"]])) print(plot_pair(win_embeds[["adjS"]]$umap, windows_sce[, win_embeds[["adjS"]]$kept_cols], "adjS (windows)"))
 ```
 
-<!-- Section dropped: yamet's S_cellmeth panel (yamet/crc_embeddings.Rmd lines 241-244) needs a raw S assay that amet does not export. -->
+<!-- Section dropped: S_cellmeth panel needs a raw S assay that amet does not export. -->
 
 ```{r win_loc_meth, fig.width = ng_fig_size(2, 1)$w, fig.height = ng_fig_size(2, 1)$h}
 ### methylation
@@ -312,10 +312,10 @@ print(sil_win)
 
 amet's window BED has only (chrom, start, end, feature_id) columns; no per-window
 genomic-feature annotation matrix is exported. The per-annotation feature space
-and the per-annotation HVW -> PCA -> UMAP loop in yamet/crc_embeddings.Rmd lines
-347-583 require that matrix and so are not portable here.
+and the per-annotation HVW -> PCA -> UMAP loop require that matrix and so are
+not portable here.
 
-<!-- Section dropped: yamet/crc_embeddings.Rmd lines 347-583 (Per-annotation cell embeddings, Per-annotation HVW -> PCA -> UMAP) require a per-window annotation matrix that amet's window BED does not provide. -->
+<!-- Section dropped: Per-annotation cell embeddings / Per-annotation HVW -> PCA -> UMAP require a per-window annotation matrix that amet's window BED does not provide. -->
 
 # Summary: all feature spaces and metrics
 

@@ -1,8 +1,7 @@
 """Subset cells.tsv to one (stage, lineage) sanitized pair.
 
-Mirrors yamet's `get_argelaguet_harmonized_files` selection logic: filter by
-sanitized stage and lineage, optionally cap at MAX_CELLS per group with
-plate-stratified round-robin top-up by file size.
+Filter by sanitized stage and lineage, optionally cap at MAX_CELLS per group
+with plate-stratified round-robin top-up by file size.
 
 Usage:
     python argelaguet_subset_manifest.py \

@@ -1,9 +1,9 @@
 #' Differential entropy testing with flexible formula and locations.
 #'
-#' Ported verbatim from yamet's rules/src/diff_testing.R. The model fits
-#' i_total against meth + I(meth^2) + loc + patient per window using rowwise
-#' lm and limma::squeezeVar moderation. The 'sampen' / 'meth' column names are
-#' preserved internally so the formula text passed by callers stays unchanged.
+#' The model fits i_total against meth + I(meth^2) + loc + patient per window
+#' using rowwise lm and limma::squeezeVar moderation. The 'sampen' / 'meth'
+#' column names are kept internally so the formula text passed by callers
+#' stays unchanged.
 #'
 #' @param sub_sampens matrix of per-cell i_total values (rows = regions, cols = cells)
 #' @param sub_meths   matrix of per-cell methylation values (same dims)

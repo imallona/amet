@@ -106,7 +106,7 @@ sanitize <- function(x) gsub("[ ._]", "-", x)
 ## Recover annotation prefix from amet feature_id (<annotation>_<index>).
 recover_annotation <- function(fid) sub("_\\d+$", "", fid)
 
-## Filename parsers (mirror yamet/argelaguet.Rmd):
+## Filename parsers:
 ##   filename = "<annotation>_<stage>_<lineage>.cell_feature.tsv.gz"
 ##   annotation may itself contain hyphens; stage and lineage are the trailing
 ##   two underscore-separated tokens before the extension.
@@ -144,9 +144,9 @@ cat("Lineage classes:", paste(sort(unique(meta_grp$lineage_class)), collapse = "
 ```
 
 ```{r load_amet}
-## Each amet run produced one TSV pair per (annotation, stage, lineage) combo,
-## mirroring yamet's per-(annotation, stage, lineage) yamet runs. Enumerate
-## files, parse the wildcard values from filenames, concatenate.
+## Each amet run produced one TSV pair per (annotation, stage, lineage)
+## combo. Enumerate files, parse the wildcard values from filenames,
+## concatenate.
 features_dir <- params$features_dir
 cf_files <- list.files(features_dir,
                        pattern = "\\.cell_feature\\.tsv\\.gz$",
@@ -200,7 +200,7 @@ feat_cf[meta_grp_dt, on = .(stage_san, lineage_san),
              lineage_class = i.lineage_class)]
 ```
 
-<!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue. yamet/argelaguet.Rmd lines 148-203 (S sample-entropy block, scatter and violin). -->
+<!-- Section dropped: amet ships only methylation-stable i_total, no raw sampen analogue, so the S sample-entropy block (scatter and violin) is not reproduced. -->
 
 # adjS - methylation-adjusted sample entropy {.tabset .tabset-pills}
 
@@ -241,7 +241,7 @@ ggplot(adjsampens %>% filter(!is.na(lineage_class)),
   theme(legend.position = "none")
 ```
 
-<!-- Section dropped: amet ships only methylation-stable jsd, no raw Shannon entropy analogue. yamet/argelaguet.Rmd lines 256-298 (H Shannon-entropy median block, scatter). -->
+<!-- Section dropped: amet ships only methylation-stable jsd, no raw Shannon entropy analogue, so the H Shannon-entropy median block (scatter) is not reproduced. -->
 
 # adjH - methylation-adjusted Shannon entropy {.tabset .tabset-pills}
 
@@ -249,9 +249,9 @@ Per-feature jsd from amet's feature TSV (amet `jsd`, the multi-distribution
 Jensen-Shannon divergence across cells in a group).
 
 ```{r import_adjH}
-## yamet's adjshannons holds one median per (annotation, stage_san,
-## lineage_san) — see yamet/argelaguet.Rmd 260-285. Aggregate amet's per-feature
-## jsd to the same shape so the downstream group_medians join doesn't explode.
+## Aggregate amet's per-feature jsd to one median per (annotation,
+## stage_san, lineage_san) so the downstream group_medians join doesn't
+## explode.
 adjshannons <- as.data.frame(
   as.data.table(feat_fe)[
     , .(median_shannon  = median(jsd, na.rm = TRUE),
@@ -331,7 +331,7 @@ if (nrow(df_cmp) > 0) {
 }
 ```
 
-<!-- Section dropped: amet has no raw H/S, so the S vs H scatter (yamet/argelaguet.Rmd lines 406-418) is gone. -->
+<!-- Section dropped: amet has no raw H/S, so the S vs H scatter is not reproduced. -->
 
 # Time course {.tabset .tabset-pills}
 
@@ -640,7 +640,7 @@ make_heatmap(heat_df_adjh, "median_adjH", "median jsd",
              palette = c("navy", "white", "firebrick"))
 ```
 
-<!-- Section dropped: amet ships no paper-MOFA UMAP overlay (yamet/argelaguet.Rmd lines 715-885). The MOFA UMAP is a yamet-specific external dependency; revisit if amet ever wires that file in. -->
+<!-- Section dropped: amet ships no paper-MOFA UMAP overlay; revisit if amet ever wires that external file in. -->
 
 # Cell-level UMAP {.tabset .tabset-pills}
 
@@ -663,8 +663,8 @@ plot_umap <- function(df, color_col, title, subtitle = NULL) {
 ```
 
 ```{r cell_umap_load}
-## amet's per-cell-per-feature i_total replaces yamet's per-cell sampen_norm.
-## Build the same wide cells x annotation matrix used downstream.
+## Build a wide cells x annotation matrix from amet's per-cell-per-feature
+## i_total.
 cells_adjS_long <- as.data.frame(feat_cf)[, c("cell_id", "stage_san",
                                                "lineage_san", "annotation",
                                                "i_total")] %>%
@@ -741,7 +741,7 @@ plot_umap(umap_cell_meth, "lineage_class",
           subtitle = "per-cell avg. methylation per annotation as feature vector")
 ```
 
-<!-- Section dropped: amet has no raw S, so the S-with-meth-regressed-out UMAP (yamet/argelaguet.Rmd lines 988-1033) is gone. -->
+<!-- Section dropped: amet has no raw S, so the S-with-meth-regressed-out UMAP is not reproduced. -->
 
 ## Group-level: adjH across annotations
 
@@ -770,4 +770,4 @@ plot_umap(umap_grp_adjH, "stage",
           subtitle = "colored by developmental stage")
 ```
 
-<!-- Section dropped: per-annotation locus-level UMAP from .norm.det.out.gz (yamet/argelaguet.Rmd lines 1062-1179). amet does not export per-locus jsd vectors per group; only per-feature jsd is available, which is already plotted above. -->
+<!-- Section dropped: per-annotation locus-level UMAP from .norm.det.out.gz is not reproduced. amet does not export per-locus jsd vectors per group; only per-feature jsd is available, which is already plotted above. -->

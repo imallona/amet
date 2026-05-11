@@ -1,6 +1,5 @@
-"""Subset cells.tsv to one (patient, location) combo. Mirrors yamet's
-get_harmonized_files for CRC: filter by exact patient + location, optionally
-cap at MAX_CELLS by file size.
+"""Subset cells.tsv to one (patient, location) combo for CRC: filter by
+exact patient + location, optionally cap at MAX_CELLS by file size.
 
 Usage:
     python crc_subset_manifest.py \

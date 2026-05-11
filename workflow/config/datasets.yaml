@@ -34,7 +34,7 @@ argelaguet:
   features_dir: ""
   mm10_dir: ""
   assembly: mm10
-  window_size: 100000
+  window_size: 500000
   proto_lineages:
     - Epiblast
     - Primitive_endoderm
@@ -55,7 +55,7 @@ ecker:
   xlsx_path: ""
   nemo_meta_path: ""
   assembly: mm10
-  window_size: 100000
+  window_size: 10000
   region_filter: MOp
   ## sub_type names follow the Liu 2021 supplement convention (space-separated,
   ## e.g. "IT-L23 Cux1"), not yamet's hyphenated names. Picked from the
@@ -74,7 +74,7 @@ crc:
   raw_dir: ""
   hg19_dir: ""
   assembly: hg19
-  window_size: 100000
+  window_size: 10000
   proto_patients:
     - CRC01
   proto_locations:

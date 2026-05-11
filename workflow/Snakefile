@@ -12,6 +12,9 @@ import pandas as pd
 REPO_ROOT = op.dirname(workflow.basedir)
 RESULTS = op.join(REPO_ROOT, "results")
 AMET = op.join(REPO_ROOT, "method", "target", "release", "amet")
+R_TOOLS_ENV = op.join(REPO_ROOT, "workflow", "envs", "r-tools.yml")
+
+workdir: REPO_ROOT
 
 configfile: op.join(workflow.basedir, "config", "sim.yaml")
 configfile: op.join(workflow.basedir, "config", "datasets.yaml")
@@ -93,6 +96,7 @@ rule render_simulations_report:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "simulations_report.Rmd"),
         evals = EVAL_OUTPUTS,
     output: SIM_REPORT_HTML
+    conda: R_TOOLS_ENV
     params:
         eval_dir = op.join(SIM, "eval"),
         out_dir = SIM,
@@ -109,6 +113,7 @@ rule generate_p_sweep:
         manifest = op.join(SIM, "data", "p_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "p_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "p_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "p_sweep"),
         n_cells = config["sim"]["n_cells_per_condition"],
@@ -157,6 +162,7 @@ rule eval_p_decoupling:
     output:
         op.join(SIM, "eval", "p_decoupling.pdf"),
         op.join(SIM, "eval", "p_decoupling.csv"),
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "p_decoupling")
     shell:
         "Rscript workflow/scripts/eval_p_decoupling.R "
@@ -166,6 +172,7 @@ rule eval_p_decoupling:
 rule eval_simulator_diagnostics:
     input: cell_feature = op.join(SIM, "amet", "p_sweep", "p_sweep.cell_feature.tsv.gz")
     output: op.join(SIM, "eval", "simulator_diagnostics.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "simulator_diagnostics")
     shell:
         "Rscript workflow/scripts/eval_simulator_diagnostics.R "
@@ -175,6 +182,7 @@ rule eval_simulator_diagnostics:
 rule eval_vs_marginal_baseline:
     input: cell_feature = op.join(SIM, "amet", "p_sweep", "p_sweep.cell_feature.tsv.gz")
     output: op.join(SIM, "eval", "vs_marginal_baseline.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "vs_marginal_baseline")
     shell:
         "Rscript workflow/scripts/eval_vs_marginal_baseline.R "
@@ -188,6 +196,7 @@ rule generate_lag_profile:
         manifest = op.join(SIM, "data", "lag_profile", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "lag_profile", "cpgs.tsv"),
         bed = op.join(SIM, "data", "lag_profile", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "lag_profile"),
         seed = config["sim"]["seed"],
@@ -224,6 +233,7 @@ rule run_amet_lag_profile:
 rule eval_lag_profile:
     input: cell_feature = op.join(SIM, "amet", "lag_profile", "lag_profile.cell_feature.tsv.gz")
     output: op.join(SIM, "eval", "lag_profile.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "lag_profile")
     shell:
         "Rscript workflow/scripts/eval_lag_profile.R "
@@ -237,6 +247,7 @@ rule generate_sparsity_sweep:
         manifest = op.join(SIM, "data", "sparsity_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "sparsity_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "sparsity_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "sparsity_sweep"),
         seed = config["sim"]["seed"],
@@ -273,6 +284,7 @@ rule run_amet_sparsity_sweep:
 rule eval_sparsity:
     input: cell_feature = op.join(SIM, "amet", "sparsity_sweep", "sparsity_sweep.cell_feature.tsv.gz")
     output: op.join(SIM, "eval", "sparsity.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "sparsity")
     shell:
         "Rscript workflow/scripts/eval_sparsity.R "
@@ -286,6 +298,7 @@ rule generate_feature_length_sweep:
         manifest = op.join(SIM, "data", "feature_length_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "feature_length_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "feature_length_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "feature_length_sweep"),
         seed = config["sim"]["seed"],
@@ -322,6 +335,7 @@ rule run_amet_feature_length_sweep:
 rule eval_feature_length:
     input: cell_feature = op.join(SIM, "amet", "feature_length_sweep", "feature_length_sweep.cell_feature.tsv.gz")
     output: op.join(SIM, "eval", "feature_length.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "feature_length")
     shell:
         "Rscript workflow/scripts/eval_feature_length.R "
@@ -335,6 +349,7 @@ rule generate_mixture_k_sweep:
         manifest = op.join(SIM, "data", "mixture_k_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "mixture_k_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "mixture_k_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "mixture_k_sweep"),
         seed = config["sim"]["seed"],
@@ -372,6 +387,7 @@ rule run_amet_mixture_k_sweep:
 rule eval_jsd_mixture_k:
     input: feature = op.join(SIM, "amet", "mixture_k_sweep", "mixture_k_sweep.feature.tsv.gz")
     output: op.join(SIM, "eval", "jsd_mixture_k.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "jsd_mixture_k")
     shell:
         "Rscript workflow/scripts/eval_jsd_mixture_k.R "
@@ -385,6 +401,7 @@ rule generate_mixture_divergence_sweep:
         manifest = op.join(SIM, "data", "mixture_divergence_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "mixture_divergence_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "mixture_divergence_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "mixture_divergence_sweep"),
         seed = config["sim"]["seed"],
@@ -422,6 +439,7 @@ rule run_amet_mixture_divergence_sweep:
 rule eval_jsd_divergence:
     input: feature = op.join(SIM, "amet", "mixture_divergence_sweep", "mixture_divergence_sweep.feature.tsv.gz")
     output: op.join(SIM, "eval", "jsd_divergence.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "jsd_divergence")
     shell:
         "Rscript workflow/scripts/eval_jsd_divergence.R "
@@ -435,6 +453,7 @@ rule generate_n_cells_sweep:
         manifest = op.join(SIM, "data", "n_cells_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "n_cells_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "n_cells_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "n_cells_sweep"),
         seed = config["sim"]["seed"],
@@ -471,6 +490,7 @@ rule run_amet_n_cells_sweep:
 rule eval_n_cells:
     input: feature = op.join(SIM, "amet", "n_cells_sweep", "n_cells_sweep.feature.tsv.gz")
     output: op.join(SIM, "eval", "n_cells.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "n_cells")
     shell:
         "Rscript workflow/scripts/eval_n_cells.R "
@@ -484,6 +504,7 @@ rule generate_wcvi_sweep:
         manifest = op.join(SIM, "data", "wcvi_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "wcvi_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "wcvi_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "wcvi_sweep"),
         seed = config["sim"]["seed"],
@@ -525,6 +546,7 @@ rule eval_wcvi_recovery:
         feature = op.join(SIM, "amet", "wcvi_sweep", "wcvi_sweep.feature.tsv.gz"),
         pair_counts = op.join(SIM, "amet", "wcvi_sweep", "wcvi_sweep.pair_counts.tsv.gz"),
     output: op.join(SIM, "eval", "wcvi_recovery.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "wcvi_recovery")
     shell:
         "Rscript workflow/scripts/eval_wcvi_recovery.R "
@@ -539,6 +561,7 @@ rule generate_acvi_sweep:
         manifest = op.join(SIM, "data", "acvi_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "acvi_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "acvi_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "acvi_sweep"),
         seed = config["sim"]["seed"],
@@ -580,6 +603,7 @@ rule eval_acvi_recovery:
         feature = op.join(SIM, "amet", "acvi_sweep", "acvi_sweep.feature.tsv.gz"),
         pair_counts = op.join(SIM, "amet", "acvi_sweep", "acvi_sweep.pair_counts.tsv.gz"),
     output: op.join(SIM, "eval", "acvi_recovery.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "acvi_recovery")
     shell:
         "Rscript workflow/scripts/eval_acvi_recovery.R "
@@ -596,6 +620,7 @@ rule eval_benchmark_summary:
         acvi_feature = op.join(SIM, "amet", "acvi_sweep", "acvi_sweep.feature.tsv.gz"),
         acvi_pair_counts = op.join(SIM, "amet", "acvi_sweep", "acvi_sweep.pair_counts.tsv.gz"),
     output: op.join(SIM, "eval", "benchmark_summary.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "benchmark_summary")
     shell:
         "Rscript workflow/scripts/eval_benchmark_summary.R "
@@ -612,7 +637,6 @@ rule eval_benchmark_summary:
 # Each tool rule emits a benchmark TSV (CPU + memory) and a stderr log so we can
 # compare runtime / footprint across amet, scMET, epiCHAOS in eval_tool_comparison.
 
-R_TOOLS_ENV = op.join(REPO_ROOT, "workflow", "envs", "r-tools.yml")
 EPICHAOS_FLAG = op.join(SIM, "flags", "epichaos_installed.flag")
 
 
@@ -705,6 +729,7 @@ rule eval_tool_comparison:
         wcvi_epichaos_bench = op.join(SIM, "benchmarks", "run_epichaos_wcvi.tsv"),
         acvi_epichaos_bench = op.join(SIM, "benchmarks", "run_epichaos_acvi.tsv"),
     output: op.join(SIM, "eval", "tool_comparison.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "tool_comparison")
     log: op.join(SIM, "logs", "eval_tool_comparison.log")
     shell:
@@ -728,6 +753,7 @@ rule generate_consensus_perturbation_sweep:
         manifest = op.join(SIM, "data", "consensus_perturbation_sweep", "manifest.tsv"),
         cpgs = op.join(SIM, "data", "consensus_perturbation_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "consensus_perturbation_sweep", "feature.bed"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "consensus_perturbation_sweep"),
         seed = config["sim"]["seed"],
@@ -806,6 +832,7 @@ rule eval_consensus_perturbation:
         scmet_bench = op.join(SIM, "benchmarks", "run_scmet_consensus_perturbation.tsv"),
         epichaos_bench = op.join(SIM, "benchmarks", "run_epichaos_consensus_perturbation.tsv"),
     output: op.join(SIM, "eval", "consensus_perturbation.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "consensus_perturbation")
     log: op.join(SIM, "logs", "eval_consensus_perturbation.log")
     shell:
@@ -830,6 +857,7 @@ rule generate_feature_variability_sweep:
         cpgs = op.join(SIM, "data", "feature_variability_sweep", "cpgs.tsv"),
         bed = op.join(SIM, "data", "feature_variability_sweep", "feature.bed"),
         ground_truth = op.join(SIM, "data", "feature_variability_sweep", "ground_truth.tsv"),
+    conda: R_TOOLS_ENV
     params:
         out_dir = op.join(SIM, "data", "feature_variability_sweep"),
         seed = config["sim"]["seed"],
@@ -911,6 +939,7 @@ rule eval_feature_variability:
         scmet_bench = op.join(SIM, "benchmarks", "run_scmet_feature_variability.tsv"),
         epichaos_bench = op.join(SIM, "benchmarks", "run_epichaos_feature_variability.tsv"),
     output: op.join(SIM, "eval", "feature_variability.pdf")
+    conda: R_TOOLS_ENV
     params: prefix = op.join(SIM, "eval", "feature_variability")
     log: op.join(SIM, "logs", "eval_feature_variability.log")
     shell:

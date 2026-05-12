@@ -10,6 +10,44 @@ REFS = op.join(RESULTS, "refs")
 ## AMET_RENDER_HELPERS env var. Declared as snakemake inputs so script edits
 ## invalidate stale HTMLs. Dataset-specific rules concatenate this with the
 ## per-Rmd extras (driver_utils.R, diff_testing.R, embedding_utils.R).
+## Per-(group-stratum, plate) cell cap. In prototype mode this matches the
+## small reproducible subset; in full runs it comes from `full.max_cells_per_combo`.
+def max_cells_per_combo():
+    if config["prototype"]["enabled"]:
+        return int(config["prototype"]["cells_per_group"])
+    return int(config["full"]["max_cells_per_combo"])
+
+
+def min_cells_per_group():
+    """Min cells per stratum before amet emits jsd. Proto is permissive; full
+    matches amet's own default (10) to suppress noisy small-group estimates."""
+    key = "min_cells_per_group_proto" if config["prototype"]["enabled"] \
+          else "min_cells_per_group_full"
+    return int(config["amet"][key])
+
+
+def run_suffix():
+    """`proto` when prototype.enabled is true, otherwise `full`. Used to suffix
+    each dataset's run_name so proto and full outputs live in distinct dirs."""
+    return "proto" if config["prototype"]["enabled"] else "full"
+
+
+def dataset_run_name(name):
+    """Build <name>_<suffix> from the prototype toggle. Datasets call this
+    instead of reading config[<name>][run_name] so flipping the toggle alone
+    re-routes outputs to a separate results/<name>_full/ directory."""
+    return f"{name}_{run_suffix()}"
+
+
+def proto_csv(dataset, key):
+    """Return the comma-joined config[dataset][key] list, or empty string if
+    the key is missing or unset. Used so the proto_* filter lists in
+    datasets.yaml can be commented out for full runs without breaking rule
+    parsing; the manifest builder scripts already no-op on an empty filter."""
+    vals = config.get(dataset, {}).get(key) or []
+    return ",".join(vals)
+
+
 SCRIPTS_DIR = op.join(REPO_ROOT, "workflow", "scripts")
 RMD_SHARED_SCRIPTS = [
     op.join(SCRIPTS_DIR, "render_logging.R"),

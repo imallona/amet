@@ -50,8 +50,20 @@ print(f"[manifest] after presence-on-disk: {len(meta)}")
 if prototype and proto_cell_types and args.group_col in meta.columns:
     meta = meta[meta[args.group_col].isin(proto_cell_types)]
     print(f"[manifest] after proto_cell_types: {len(meta)}")
-    meta = meta.groupby(args.group_col, group_keys=False).head(args.cells_per_group)
-    print(f"[manifest] after cells_per_group cap: {len(meta)}")
+    # No head() here. The per-combo subset picks top-N by source-TAR size
+    # (proxy for cell coverage) and plate-balances the pick.
+
+# Per-cell coverage proxy: the source TAR contains one allc tsv.gz per cell,
+# so TAR size is monotonic in observed CpGs. Computed at manifest time
+# because per-cell extracted tsv.gz files don't exist yet.
+def tar_size(basename):
+    try:
+        return os.path.getsize(op.join(args.raw_dir, basename))
+    except OSError:
+        return 0
+
+meta = meta.copy()
+meta["size"] = meta["basename"].apply(tar_size)
 
 if args.group_col not in meta.columns:
     raise SystemExit(f"group column '{args.group_col}' missing from meta")
@@ -69,6 +81,7 @@ out = pd.DataFrame({
     "group": meta[args.group_col].astype(str),
     "path": meta["basename"].apply(cell_path).apply(op.abspath),
     "format": "allc",
+    "size": meta["size"].values,
 })
 ## sub_type and sub_region must both be available as separate keys (the
 ## wildcard names {sub_region, sub_type} read these).

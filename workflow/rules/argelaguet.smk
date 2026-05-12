@@ -21,7 +21,7 @@ ARG_CELLS = op.join(ARG_DATA, "cells")
 ARG_FEATURES_DIR = op.join(ARG_DATA, "features")
 ARG_MM10_DIR = op.join(ARG_DATA, "mm10")
 
-ARG_RUN_NAME = config["argelaguet"]["run_name"]
+ARG_RUN_NAME = dataset_run_name("argelaguet")
 ARG_RUN = op.join(RESULTS, ARG_RUN_NAME)
 
 ## Annotation set: outer key = category, inner key = annotation name; the
@@ -68,7 +68,7 @@ _ALL_ARGELAGUET_ANN_NAMES = sorted(
 )
 
 ARGELAGUET_STRATIFY_BY = ["stage", "lineage"]
-ARGELAGUET_MAX_CELLS = config.get("argelaguet", {}).get("max_cells_per_combo", 20)
+ARGELAGUET_MAX_CELLS = max_cells_per_combo()
 
 
 rule filter_argelaguet_metadata:
@@ -251,7 +251,7 @@ rule run_amet_on_argelaguet_features:
             "{annotation}_{stage}_{lineage}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 4)
     log:
@@ -352,7 +352,7 @@ rule run_amet_on_argelaguet_windows:
         prefix = op.join(ARG_RUN, "windows", "all"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 8)
     log:

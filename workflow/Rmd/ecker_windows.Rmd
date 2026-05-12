@@ -90,6 +90,13 @@ knitr::opts_chunk$set(
 )
 ```
 
+## Cell selection upstream of this Rmd:
+##   Per (sub_region, sub_type) stratum, cells are picked by source-TAR size
+##   (proxy for observed-CpG coverage; tar contains one allc tsv.gz per cell)
+##   with plate-stratified round-robin so a single sequencing plate cannot
+##   dominate the pick. Cap = max_cells_per_combo (config/datasets.yaml:
+##   prototype.cells_per_group in proto, full.max_cells_per_combo otherwise).
+
 ```{r load_meta}
 man <- fread(params$manifest)
 cat("Cells in manifest:", nrow(man), "\n")

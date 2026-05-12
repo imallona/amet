@@ -416,14 +416,16 @@ if (have_annotation) {
 ```
 
 ```{r per_locus_umap}
+## We want UMAP coords per window. run_embedding expects features x cells and
+## treats cells (columns) as observations, so feed it stages x windows: each
+## window becomes a "cell" and gets one UMAP point.
 if (per_locus_ok) {
-  ## features = windows are the units we embed -> transpose so embedding sees
-  ## windows as samples.
   pca_in <- t(m)
-  pca_in <- pca_in[, apply(pca_in, 2, function(x) sd(x, na.rm = TRUE) > 0),
-                   drop = FALSE]
-  per_locus_embed <- run_embedding(t(pca_in), n_hvf = min(2000L, nrow(m)),
-                                   n_pcs = min(10L, ncol(m) - 1L),
+  keep_cols <- apply(pca_in, 2, function(x) sd(x, na.rm = TRUE) > 0)
+  pca_in <- pca_in[, keep_cols, drop = FALSE]
+  per_locus_embed <- run_embedding(pca_in,
+                                   n_hvf = min(2000L, nrow(pca_in)),
+                                   n_pcs = min(10L, nrow(pca_in) - 1L),
                                    n_neighbors = 15L, min_dist = 0.3,
                                    seed = 42L)
 } else {
@@ -433,16 +435,18 @@ if (per_locus_ok) {
 if (is.null(per_locus_embed)) {
   cat("Skipping per-locus UMAP: insufficient data.\n")
 } else {
-  cat("Per-locus UMAP cells (windows) kept:",
+  cat("Per-locus UMAP windows kept:",
       sum(per_locus_embed$kept_cols), "\n")
 }
 ```
 
 ```{r per_locus_umap_i_total, fig.width = ng_fig_size(1, 1, panel_mm = 60)$w, fig.height = ng_fig_size(1, 1, panel_mm = 60)$h}
 if (!is.null(per_locus_embed)) {
-  kept_feats <- rownames(m)[per_locus_embed$kept_cols]
-  per_locus_i_total <- rowMeans(m[per_locus_embed$kept_cols, , drop = FALSE],
-                                na.rm = TRUE)
+  ## kept_cols of run_embedding indexes the columns it received (= windows in
+  ## pca_in). Map back to window names and take per-window mean i_total over
+  ## stages.
+  kept_feats <- colnames(pca_in)[per_locus_embed$kept_cols]
+  per_locus_i_total <- rowMeans(m[kept_feats, , drop = FALSE], na.rm = TRUE)
   per_locus_df <- data.frame(
     feature_id = kept_feats,
     umap1 = per_locus_embed$umap[, 1],
@@ -470,8 +474,13 @@ if (!is.null(per_locus_embed) && !is.null(assays_list$meth)) {
     i_norm_mat[, j] <- compute_i_norm(i_total_mat[, j], meth_mat[, j],
                                       params$i_max_lag)
   }
-  per_locus_i_norm <- rowMeans(i_norm_mat[per_locus_embed$kept_cols, , drop = FALSE],
-                               na.rm = TRUE)
+  rows_in_sce <- intersect(kept_feats, rownames(i_norm_mat))
+  per_locus_i_norm <- rep(NA_real_, length(kept_feats))
+  names(per_locus_i_norm) <- kept_feats
+  if (length(rows_in_sce) > 0) {
+    per_locus_i_norm[rows_in_sce] <- rowMeans(
+      i_norm_mat[rows_in_sce, , drop = FALSE], na.rm = TRUE)
+  }
   per_locus_df_norm <- data.frame(
     feature_id = kept_feats,
     umap1 = per_locus_embed$umap[, 1],

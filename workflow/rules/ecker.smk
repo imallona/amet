@@ -23,8 +23,8 @@ Two acquisition paths:
 ECKER_DATA = op.join(RESULTS, "ecker")
 ECKER_RAW = op.join(ECKER_DATA, "raw")
 ECKER_CELLS = op.join(ECKER_DATA, "cells")
-ECKER_RUN = op.join(RESULTS, config["ecker"]["run_name"])
-ECKER_RUN_NAME = config["ecker"]["run_name"]
+ECKER_RUN = op.join(RESULTS, dataset_run_name("ecker"))
+ECKER_RUN_NAME = dataset_run_name("ecker")
 
 ## Ecker annotations dict. Annotation name == wildcard {annotation}; outer
 ## key is unused at the wildcard level.
@@ -174,7 +174,7 @@ checkpoint ecker_make_manifest:
         raw_dir = ECKER_RAW,
         cells_dir = ECKER_CELLS,
         region = config["ecker"]["region_filter"],
-        proto_cell_types = ",".join(config["ecker"]["proto_cell_types"]),
+        proto_cell_types = proto_csv("ecker", "proto_cell_types"),
         cells_per_group = config["prototype"]["cells_per_group"],
         group_col = config["ecker"]["group_column"],
         prototype = "true" if config["prototype"]["enabled"] else "false",
@@ -350,7 +350,7 @@ rule ecker_per_combo_manifest:
         manifest = op.join(ECKER_DATA, "manifests",
                            "{sub_region}_{sub_type}.tsv"),
     params:
-        max_cells = config["prototype"]["cells_per_group"],
+        max_cells = max_cells_per_combo(),
     log:
         op.join(ECKER_DATA, "logs",
                 "manifest_{sub_region}_{sub_type}.log"),
@@ -407,7 +407,7 @@ rule run_amet_on_ecker_features:
             "{annotation}_{sub_region}_{sub_type}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 4)
     log:
@@ -449,7 +449,7 @@ rule run_amet_on_ecker_windows:
         prefix = op.join(ECKER_RUN, "windows", "all"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 8)
     log:

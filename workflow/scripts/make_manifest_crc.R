@@ -39,11 +39,16 @@ dt[, cell_id := paste(patient, location, gsm, cell_idx, sep = "_")]
 if (prototype) {
     if (length(patients_keep))  dt <- dt[patient  %in% patients_keep]
     if (length(locations_keep)) dt <- dt[location %in% locations_keep]
-    dt <- dt[order(patient, location)]
-    dt <- dt[, head(.SD, opt$cells_per_group), by = .(patient, location)]
 }
 
-out <- dt[, .(cell_id, group = location, path, format = "bismark", patient, location)]
+## Per-cell coverage proxy. singleC.txt.gz is one line per observed CpG, so
+## file size on disk is monotonic in cell coverage. The per-combo subset
+## reads this column to pick the top-N highest-coverage cells per stratum.
+dt[, size := file.size(path)]
+dt <- dt[order(patient, location, -size)]
+
+out <- dt[, .(cell_id, group = location, path, format = "bismark",
+              patient, location, size)]
 fwrite(out, opt$out, sep = "\t")
 message(sprintf("[manifest] wrote %d cells across %d groups",
                 nrow(out), uniqueN(out$group)))

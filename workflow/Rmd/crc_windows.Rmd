@@ -128,6 +128,13 @@ if (ncol(annot) > 0 && nrow(annot) > 0) {
 }
 ```
 
+## Cell selection upstream of this Rmd:
+##   Per (patient, location) stratum, cells are picked by singleC.txt.gz
+##   size on disk (proxy for observed-CpG coverage). CRC has no per-cell
+##   plate metadata in the GEO filenames, so picks are plain top-N. Cap =
+##   max_cells_per_combo (config/datasets.yaml: prototype.cells_per_group
+##   in proto, full.max_cells_per_combo otherwise).
+
 ```{r read_jsd_long}
 ## amet exports per-feature jsd (feature.tsv.gz) and per-cell-per-feature
 ## i_total (cell_feature.tsv.gz). Build a long `jsd_long` data.frame plus a

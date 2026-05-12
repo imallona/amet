@@ -24,8 +24,8 @@ reads whatever is there.
 CRC_DATA = op.join(RESULTS, "crc")
 CRC_RAW = op.join(CRC_DATA, "raw")
 CRC_BEDS = op.join(CRC_DATA, "beds")
-CRC_RUN = op.join(RESULTS, config["crc"]["run_name"])
-CRC_RUN_NAME = config["crc"]["run_name"]
+CRC_RUN = op.join(RESULTS, dataset_run_name("crc"))
+CRC_RUN_NAME = dataset_run_name("crc")
 
 ## CRC annotations dict. Keys: cat (outer), values: list of subcats (inner).
 ## Wildcards: {subcat}_{cat}_{patient}_{location}.
@@ -150,8 +150,8 @@ checkpoint crc_make_manifest:
         manifest = op.join(CRC_DATA, "cells.tsv"),
     params:
         raw_dir = CRC_RAW,
-        proto_patients = ",".join(config["crc"]["proto_patients"]),
-        proto_locations = ",".join(config["crc"]["proto_locations"]),
+        proto_patients = proto_csv("crc", "proto_patients"),
+        proto_locations = proto_csv("crc", "proto_locations"),
         cells_per_group = config["prototype"]["cells_per_group"],
         prototype = "true" if config["prototype"]["enabled"] else "false",
     log:
@@ -178,7 +178,7 @@ rule crc_per_combo_manifest:
         manifest = op.join(CRC_DATA, "manifests",
                            "{patient}_{location}.tsv"),
     params:
-        max_cells = config["prototype"]["cells_per_group"],
+        max_cells = max_cells_per_combo(),
     log:
         op.join(CRC_DATA, "logs", "manifest_{patient}_{location}.log"),
     shell:
@@ -353,7 +353,7 @@ rule run_amet_on_crc_features:
             "{subcat}_{cat}_{patient}_{location}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 4)
     log:
@@ -399,7 +399,7 @@ rule run_amet_on_crc_windows:
             CRC_RUN, "windows", "{patient}_{location}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 4)
     log:

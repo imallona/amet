@@ -24,13 +24,20 @@ merged <- merge(have, meta, by.x = "cell_id", by.y = "id_met")
 extra_cols <- intersect(c("lineage10x", "lineage10x_2", "plate"),
                         colnames(merged))
 
+## Per-cell coverage proxy: cpg_level tsv.gz is one line per observed CpG,
+## so size on disk is monotonic in cell coverage. Written so the per-combo
+## subset can pick the top-N highest-coverage cells per (stage, lineage)
+## plate-balanced without re-stat-ing the filesystem.
+merged[, size := file.size(path)]
+
 out <- merged[, .(
     cell_id,
-    group  = get(opt$group_col),
+    group = get(opt$group_col),
     path,
     format = "scnmt",
     stage,
-    embryo
+    embryo,
+    size
 )]
 for (col in extra_cols)
     out[[col]] <- merged[[col]]

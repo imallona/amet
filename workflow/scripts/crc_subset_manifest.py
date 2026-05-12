@@ -1,11 +1,15 @@
-"""Subset cells.tsv to one (patient, location) combo for CRC: filter by
-exact patient + location, optionally cap at MAX_CELLS by file size.
+"""Subset cells.tsv to one (patient, location) combo for CRC.
+
+Filter to exact patient and location, then keep the top --max-cells cells
+ranked by the `size` column (coverage proxy: singleC.txt.gz size on disk is
+monotonic in observed CpGs). CRC has no per-cell plate metadata, so picks
+are plain top-N -- no plate stratification.
 
 Usage:
     python crc_subset_manifest.py \
         --cells cells.tsv \
         --patient CRC01 --location NC \
-        --max-cells 20 \
+        --max-cells 50 \
         --out manifests/CRC01_NC.tsv
 """
 
@@ -17,7 +21,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--cells", required=True)
 ap.add_argument("--patient", required=True)
 ap.add_argument("--location", required=True)
-ap.add_argument("--max-cells", type=int, default=20)
+ap.add_argument("--max-cells", type=int, default=50)
 ap.add_argument("--out", required=True)
 args = ap.parse_args()
 
@@ -30,16 +34,23 @@ sub = [r for r in rows
        if r.get("patient") == args.patient
        and r.get("location") == args.location]
 
-if len(sub) > args.max_cells:
-    for r in sub:
+
+def cell_size(row):
+    val = row.get("size")
+    if val not in (None, ""):
         try:
-            r["_size"] = os.path.getsize(r["path"])
-        except OSError:
-            r["_size"] = 0
-    sub.sort(key=lambda r: r["_size"], reverse=True)
+            return int(val)
+        except ValueError:
+            pass
+    try:
+        return os.path.getsize(row["path"])
+    except OSError:
+        return 0
+
+
+sub.sort(key=cell_size, reverse=True)
+if len(sub) > args.max_cells:
     sub = sub[: args.max_cells]
-    for r in sub:
-        r.pop("_size", None)
 
 os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 with open(args.out, "w", newline="") as f:

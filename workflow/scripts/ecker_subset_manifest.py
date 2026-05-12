@@ -1,14 +1,20 @@
-"""Subset cells.tsv to one (sub_region, sub_type) combo: filter by sanitized
-sub_region and sub_type, cap at MAX_CELLS by file size.
+"""Subset cells.tsv to one (sub_region, sub_type) combo for Ecker.
 
-Sanitization: replace every space with '-'. Stage strings have spaces in the
-source metadata (e.g. "IT-L23 Cux1") so the wildcard value is "IT-L23-Cux1".
+Filter to the sanitized (sub_region, sub_type) pair, then keep the top
+--max-cells cells ranked by the `size` column (coverage proxy: source TAR
+size, written by the manifest builder) with plate-stratified round-robin:
+within each plate cells are ranked by size; across plates the max-cells
+slots are distributed evenly so a single high-coverage plate cannot
+dominate the pick.
+
+Sanitization: replace every space with '-' to match the wildcard values
+the smk rules use (e.g. "IT-L23 Cux1" -> "IT-L23-Cux1").
 
 Usage:
     python ecker_subset_manifest.py \
         --cells cells.tsv \
         --sub-region MOp --sub-type "IT-L23-Cux1" \
-        --max-cells 20 \
+        --max-cells 50 \
         --out manifests/MOp_IT-L23-Cux1.tsv
 """
 
@@ -20,7 +26,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--cells", required=True)
 ap.add_argument("--sub-region", required=True)
 ap.add_argument("--sub-type", required=True)
-ap.add_argument("--max-cells", type=int, default=20)
+ap.add_argument("--max-cells", type=int, default=50)
 ap.add_argument("--out", required=True)
 args = ap.parse_args()
 
@@ -38,16 +44,44 @@ sub = [r for r in rows
        if sanitize(r.get("sub_region", "")) == args.sub_region
        and sanitize(r.get("sub_type", "")) == args.sub_type]
 
-if len(sub) > args.max_cells:
-    for r in sub:
+
+def cell_size(row):
+    val = row.get("size")
+    if val not in (None, ""):
         try:
-            r["_size"] = os.path.getsize(r["path"])
-        except OSError:
-            r["_size"] = 0
-    sub.sort(key=lambda r: r["_size"], reverse=True)
-    sub = sub[: args.max_cells]
-    for r in sub:
-        r.pop("_size", None)
+            return int(val)
+        except ValueError:
+            pass
+    try:
+        return os.path.getsize(row["path"])
+    except OSError:
+        return 0
+
+
+if len(sub) > args.max_cells:
+    plate_col = "plate" if "plate" in fieldnames else None
+    if plate_col:
+        plate_groups = {}
+        for r in sub:
+            p = r.get(plate_col) or "_unknown"
+            plate_groups.setdefault(p, []).append(r)
+        for p in plate_groups:
+            plate_groups[p].sort(key=cell_size, reverse=True)
+        picked = []
+        order = sorted(plate_groups.keys())
+        while len(picked) < args.max_cells and any(plate_groups.values()):
+            for p in order:
+                if not plate_groups[p]:
+                    continue
+                picked.append(plate_groups[p].pop(0))
+                if len(picked) == args.max_cells:
+                    break
+        sub = picked
+    else:
+        sub.sort(key=cell_size, reverse=True)
+        sub = sub[: args.max_cells]
+else:
+    sub.sort(key=cell_size, reverse=True)
 
 os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 with open(args.out, "w", newline="") as f:

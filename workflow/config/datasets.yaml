@@ -1,13 +1,23 @@
 ## Dataset analyses for amet (crc, ecker, argelaguet).
 ##
-## Prototype mode runs a small subset; flip prototype.enabled to false for the
-## full run. Subsets are hardcoded so that runs are reproducible without
-## re-deriving cell selections.
+## Two run modes:
+##   prototype.enabled: true   small reproducible subset (proto_* keys below).
+##   prototype.enabled: false  full run; per-combo cap comes from full.max_cells_per_combo.
+##
+## Cell downsampling per (group-stratum, plate where available) is coverage-
+## ranked: file size on disk is monotonic in observed CpGs for amet's input
+## formats (bismark singleC, allc, scnmt cpg_level), so largest files first.
+## Argelaguet and Ecker have a `plate` column; the per-combo subset script
+## plate-stratifies with round-robin top-up to avoid a single plate dominating.
+## CRC has no per-cell plate metadata, so it falls back to plain top-N by size.
 
 prototype:
   enabled: true
-  cells_per_group: 10           # enough cells per group for cell-level PCA/UMAP and clustered heatmaps
+  cells_per_group: 10           # cap per (group, plate) combo in proto mode
   features_subset: 200          # take first N intervals of each feature BED
+
+full:
+  max_cells_per_combo: 30       # cap per per-combo stratum in full runs
 
 barbara:
   host: barbara
@@ -35,11 +45,13 @@ argelaguet:
   mm10_dir: ""
   assembly: mm10
   window_size: 500000
-  proto_lineages:
-    - Epiblast
-    - Primitive_endoderm
-    - Nascent_mesoderm
-    - Rostral_neurectoderm
+  ## proto_lineages: uncomment to restrict prototype runs to a subset.
+  ## Currently unused (no smk rule reads it).
+  # proto_lineages:
+  #   - Epiblast
+  #   - Primitive_endoderm
+  #   - Nascent_mesoderm
+  #   - Rostral_neurectoderm
 
 ecker:
   run_name: ecker_proto
@@ -60,9 +72,11 @@ ecker:
   ## sub_type names follow the Liu 2021 supplement convention (space-separated,
   ## e.g. "IT-L23 Cux1"). Picked from the alphabetic-first slice that
   ## sync_from_barbara.sh pulls.
-  proto_cell_types:
-    - "IT-L23 Cux1"
-    - "IT-L4 Shc3"
+  ## proto_cell_types: uncomment when prototype.enabled is true to keep only
+  ## these sub_types. Empty/commented = no sub_type filter (use the whole region).
+  # proto_cell_types:
+  #   - "IT-L23 Cux1"
+  #   - "IT-L4 Shc3"
 
 crc:
   run_name: crc_proto
@@ -75,18 +89,22 @@ crc:
   hg19_dir: ""
   assembly: hg19
   window_size: 10000
-  proto_patients:
-    - CRC01
-  proto_locations:
-    - NC
-    - PT
-    - LN
+  ## proto_patients / proto_locations: uncomment when prototype.enabled is
+  ## true to restrict CRC to these patients and locations. Empty/commented =
+  ## no patient or location filter (every (patient, location) combo runs).
+  # proto_patients:
+  #   - CRC01
+  # proto_locations:
+  #   - NC
+  #   - PT
+  #   - LN
 
 amet:
   i_max_lag: 3
   min_cpgs_per_feature: 5
-  # Lower bound on cells per stratum before amet emits jsd. Set low so
-  # prototype runs with sparse strata still produce JSD rows; raise to 10+
-  # for the full run if you want to suppress noisy small-group estimates.
-  min_cells_per_group: 2
+  ## Lower bound on cells per stratum before amet emits jsd. Proto value is
+  ## permissive so sparse-stratum runs still produce JSD rows; full matches
+  ## amet's own default to suppress noisy small-group estimates.
+  min_cells_per_group_proto: 2
+  min_cells_per_group_full: 10
   meth_call_threshold: 0.1

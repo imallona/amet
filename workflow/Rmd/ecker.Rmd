@@ -70,8 +70,8 @@ knitr::opts_chunk$set(
 Mouse (mm10), CpG context only.
 
 ```{r helpers}
-## filenames: {annotation}_{sub_region}_{sub_type}.*.gz
-## annotation has no underscores; neither do sub_region or sub_type values
+## filenames: {annotation}_{region}_{sub_type}.*.gz
+## annotation has no underscores; neither do region or sub_type values
 get_annotation <- function(fn) sub("^(.*)_[^_]+_[^_]+\\..*$", "\\1", fn)
 get_sub_region <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$", "\\1", fn)
 get_sub_type <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",   "\\1", fn)
@@ -95,7 +95,7 @@ harmonize_levels <- function(df) {
   df$annotation <- factor(df$annotation,
                            levels = names(ann_labels),
                            labels = unname(ann_labels))
-  if ("sub_region" %in% names(df)) df$sub_region <- factor(df$sub_region)
+  if ("region" %in% names(df)) df$region <- factor(df$region)
   if ("sub_type"   %in% names(df)) df$sub_type <- factor(df$sub_type)
   df
 }
@@ -106,17 +106,17 @@ sanitize <- function(x) gsub(" ", "-", x)
 
 ```{r load_metadata_early}
 ## Load cell-level metadata early so cell_class / major_type are available
-## in all data-loading chunks below. amet's manifest carries sub_region,
+## in all data-loading chunks below. amet's manifest carries region,
 ## sub_type, cell_class, major_type per cell (see make_manifest_ecker.py).
 man <- fread(params$manifest)
 meta_cells <- as.data.frame(man) %>%
   mutate(
-    sub_region = sanitize(as.character(sub_region)),
+    region = sanitize(as.character(region)),
     sub_type = sanitize(as.character(sub_type))
   )
 
 meta_grp <- meta_cells %>%
-  group_by(sub_region, sub_type) %>%
+  group_by(region, sub_type) %>%
   summarise(
     cell_class = if ("cell_class" %in% names(meta_cells))
                    first(na.omit(cell_class)) else NA_character_,
@@ -131,7 +131,7 @@ cat("cell_class levels:", paste(sort(unique(meta_grp$cell_class)), collapse = ",
 ```
 
 ```{r load_amet}
-## amet emits one TSV pair per (annotation, sub_region, sub_type) stratum.
+## amet emits one TSV pair per (annotation, region, sub_type) stratum.
 ## Enumerate, parse the wildcard values from filenames, concatenate.
 features_dir <- params$features_dir
 cf_files <- list.files(features_dir,
@@ -154,7 +154,7 @@ read_combo_cf <- function(fp) {
                 i_total = mean(i_total, na.rm = TRUE)),
             by = cell_id]
   agg[, annotation := get_annotation(bx)]
-  agg[, sub_region := get_sub_region(bx)]
+  agg[, region := get_sub_region(bx)]
   agg[, sub_type := get_sub_type(bx)]
   agg
 }
@@ -165,7 +165,7 @@ read_combo_fe <- function(fp) {
   bx <- paste0(base, ".x")
   dt <- fread(fp)
   dt[, annotation := get_annotation(bx)]
-  dt[, sub_region := get_sub_region(bx)]
+  dt[, region := get_sub_region(bx)]
   dt[, sub_type := get_sub_type(bx)]
   dt
 }
@@ -177,10 +177,10 @@ cat("loaded", length(cf_files), "cell_feature TSVs and",
     length(fe_files), "feature TSVs from", features_dir, "\n")
 
 ## Attach cell_class / major_type per stratum (one row per
-## (sub_region, sub_type), not per cell). Update by reference.
-meta_grp_dt <- as.data.table(meta_grp)[, .(sub_region, sub_type,
+## (region, sub_type), not per cell). Update by reference.
+meta_grp_dt <- as.data.table(meta_grp)[, .(region, sub_type,
                                             cell_class, major_type)]
-feat_cf[meta_grp_dt, on = .(sub_region, sub_type),
+feat_cf[meta_grp_dt, on = .(region, sub_type),
         `:=`(cell_class = i.cell_class, major_type = i.major_type)]
 ```
 
@@ -242,18 +242,18 @@ Jensen-Shannon divergence across cells in a group).
 
 ```{r import_jsd}
 ## Aggregate amet's per-feature jsd to one median per (annotation,
-## sub_region, sub_type) so the downstream group_medians join doesn't explode.
+## region, sub_type) so the downstream group_medians join doesn't explode.
 jsd_medians <- as.data.frame(
   as.data.table(feat_fe)[
     , .(median_jsd = median(jsd, na.rm = TRUE),
         median_avg_meth = median(mean_meth_mean, na.rm = TRUE)),
-    by = .(annotation, sub_region, sub_type)
+    by = .(annotation, region, sub_type)
   ]
 )
 jsd_medians <- harmonize_levels(jsd_medians)
 jsd_medians <- jsd_medians %>%
-  left_join(meta_grp %>% select(sub_region, sub_type, cell_class, major_type),
-            by = c("sub_region", "sub_type"))
+  left_join(meta_grp %>% select(region, sub_type, cell_class, major_type),
+            by = c("region", "sub_type"))
 head(jsd_medians)
 ```
 
@@ -291,14 +291,14 @@ Aggregate per-cell i_total to per-group medians so it is comparable to jsd.
 
 ```{r group_medians}
 i_total_grp <- i_total_long %>%
-  group_by(annotation, sub_region, sub_type) %>%
+  group_by(annotation, region, sub_type) %>%
   summarise(median_i_total = median(i_total, na.rm = TRUE),
             median_meth = median(avg_meth, na.rm = TRUE),
             .groups = "drop")
 
 all_grp <- i_total_grp %>%
-  left_join(jsd_medians %>% select(annotation, sub_region, sub_type, median_jsd),
-            by = c("annotation", "sub_region", "sub_type"))
+  left_join(jsd_medians %>% select(annotation, region, sub_type, median_jsd),
+            by = c("annotation", "region", "sub_type"))
 
 head(all_grp)
 ```
@@ -306,9 +306,9 @@ head(all_grp)
 ```{r load_metadata}
 ## Attach CellClass / MajorType to the group-level table.
 all_grp_meta <- all_grp %>%
-  mutate(sub_region = as.character(sub_region),
+  mutate(region = as.character(region),
          sub_type = as.character(sub_type)) %>%
-  left_join(meta_grp, by = c("sub_region", "sub_type"))
+  left_join(meta_grp, by = c("region", "sub_type"))
 
 saveRDS(
   list(all_grp = all_grp,
@@ -386,7 +386,7 @@ if (nrow(var_class) > 0 && any(!is.na(var_class$jsd_sd))) {
 
 For each annotation we compute the SD of group-level median jsd (across-cell
 heterogeneity) and median i_total (within-cell heterogeneity) across all
-(sub_region, sub_type) groups. If one SD is at least 1.5x the other, that
+(region, sub_type) groups. If one SD is at least 1.5x the other, that
 component dominates. Annotations where both SDs fall below the 30th percentile
 are labelled "neither".
 
@@ -459,7 +459,7 @@ make_heatmap <- function(df, value_col, title,
 
 ```{r heatmap_i_total, fig.width = 10, fig.height = 8}
 heat_df_i_total <- i_total_long %>%
-  group_by(annotation, sub_region, sub_type, cell_class, major_type) %>%
+  group_by(annotation, region, sub_type, cell_class, major_type) %>%
   summarise(median_i_total = median(i_total, na.rm = TRUE), .groups = "drop")
 
 make_heatmap(heat_df_i_total, "median_i_total", "median i_total",
@@ -470,7 +470,7 @@ make_heatmap(heat_df_i_total, "median_i_total", "median i_total",
 
 ```{r heatmap_jsd, fig.width = 10, fig.height = 8}
 heat_df_jsd <- jsd_medians %>%
-  group_by(annotation, sub_region, sub_type, cell_class, major_type) %>%
+  group_by(annotation, region, sub_type, cell_class, major_type) %>%
   summarise(median_jsd = median(median_jsd, na.rm = TRUE), .groups = "drop")
 
 make_heatmap(heat_df_jsd, "median_jsd", "median jsd",
@@ -507,39 +507,39 @@ plot_umap_class <- function(df, title, subtitle = NULL) {
 ```{r cell_umap_load}
 ## Build a wide cells x annotation matrix from amet's per-cell-per-feature
 ## i_total.
-cells_i_total_long <- as.data.frame(feat_cf)[, c("cell_id", "sub_region",
+cells_i_total_long <- as.data.frame(feat_cf)[, c("cell_id", "region",
                                                   "sub_type", "annotation",
                                                   "i_total")] %>%
   rename(value = i_total) %>%
-  group_by(cell_id, sub_region, sub_type, annotation) %>%
+  group_by(cell_id, region, sub_type, annotation) %>%
   summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
 cells_i_total_long$annotation <- factor(cells_i_total_long$annotation,
                                          levels = names(ann_labels),
                                          labels = unname(ann_labels))
 
-cells_meth_long <- as.data.frame(feat_cf)[, c("cell_id", "sub_region",
+cells_meth_long <- as.data.frame(feat_cf)[, c("cell_id", "region",
                                                "sub_type", "annotation",
                                                "mean_meth")] %>%
   rename(value = mean_meth) %>%
-  group_by(cell_id, sub_region, sub_type, annotation) %>%
+  group_by(cell_id, region, sub_type, annotation) %>%
   summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
 cells_meth_long$annotation <- factor(cells_meth_long$annotation,
                                       levels = names(ann_labels),
                                       labels = unname(ann_labels))
 
 cells_i_total_wide <- pivot_wider(cells_i_total_long,
-                                   id_cols = c(cell_id, sub_region, sub_type),
+                                   id_cols = c(cell_id, region, sub_type),
                                    names_from = annotation,
                                    values_from = value) %>%
-  left_join(meta_grp %>% select(sub_region, sub_type, cell_class, major_type),
-            by = c("sub_region", "sub_type"))
+  left_join(meta_grp %>% select(region, sub_type, cell_class, major_type),
+            by = c("region", "sub_type"))
 
 cells_meth_wide <- pivot_wider(cells_meth_long,
-                                id_cols = c(cell_id, sub_region, sub_type),
+                                id_cols = c(cell_id, region, sub_type),
                                 names_from = annotation,
                                 values_from = value) %>%
-  left_join(meta_grp %>% select(sub_region, sub_type, cell_class, major_type),
-            by = c("sub_region", "sub_type"))
+  left_join(meta_grp %>% select(region, sub_type, cell_class, major_type),
+            by = c("region", "sub_type"))
 
 saveRDS(list(cells_i_total_wide = cells_i_total_wide,
              cells_meth_wide = cells_meth_wide),
@@ -551,7 +551,7 @@ print(table(cells_i_total_wide$cell_class, useNA = "always"))
 ```
 
 ```{r cell_umap_i_total, fig.width = 5, fig.height = 5}
-meta_cols_cell <- c("cell_id", "sub_region", "sub_type", "cell_class", "major_type")
+meta_cols_cell <- c("cell_id", "region", "sub_type", "cell_class", "major_type")
 
 umap_cell_i_total <- run_umap_wide(cells_i_total_wide, meta_cols_cell, n_neighbors = 15L)
 saveRDS(umap_cell_i_total, "ecker_umap_cell_i_total.rds")
@@ -577,11 +577,11 @@ plot_umap_class(umap_cell_meth,
 ```{r group_umap_jsd, fig.width = 5, fig.height = 5}
 jsd_wide_grp <- all_grp_meta %>%
   filter(!is.na(cell_class)) %>%
-  select(sub_region, sub_type, cell_class, major_type, annotation, median_jsd) %>%
+  select(region, sub_type, cell_class, major_type, annotation, median_jsd) %>%
   pivot_wider(names_from = annotation, values_from = median_jsd)
 
 umap_grp_jsd <- run_umap_wide(jsd_wide_grp,
-                              meta_cols = c("sub_region", "sub_type",
+                              meta_cols = c("region", "sub_type",
                                             "cell_class", "major_type"),
                               n_neighbors = 5L)
 saveRDS(umap_grp_jsd, "ecker_umap_grp_jsd.rds")
@@ -596,11 +596,11 @@ plot_umap_class(umap_grp_jsd,
 ```{r group_umap_meth, fig.width = 5, fig.height = 5}
 meth_wide_grp <- all_grp_meta %>%
   filter(!is.na(cell_class)) %>%
-  select(sub_region, sub_type, cell_class, major_type, annotation, median_meth) %>%
+  select(region, sub_type, cell_class, major_type, annotation, median_meth) %>%
   pivot_wider(names_from = annotation, values_from = median_meth)
 
 umap_grp_meth <- run_umap_wide(meth_wide_grp,
-                                meta_cols = c("sub_region", "sub_type",
+                                meta_cols = c("region", "sub_type",
                                               "cell_class", "major_type"),
                                 n_neighbors = 5L)
 plot_umap_class(umap_grp_meth,

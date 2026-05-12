@@ -42,7 +42,7 @@ ECKER_MM10 = op.join(ECKER_DATA, "mm10")
 _ECKER_ALL_ANN_NAMES = sorted({a for cat in ECKER_ANNOTATIONS
                                for a in ECKER_ANNOTATIONS[cat]})
 
-ECKER_STRATIFY_BY = ["sub_region", "sub_type"]
+ECKER_STRATIFY_BY = ["region", "sub_type"]
 
 
 rule ecker_download_nemo_metadata:
@@ -173,8 +173,9 @@ checkpoint ecker_make_manifest:
     params:
         raw_dir = ECKER_RAW,
         cells_dir = ECKER_CELLS,
-        region = config["ecker"]["region_filter"],
+        region_filter = config["ecker"]["region_filter"],
         proto_cell_types = proto_csv("ecker", "proto_cell_types"),
+        proto_regions = proto_csv("ecker", "proto_regions"),
         cells_per_group = config["prototype"]["cells_per_group"],
         group_col = config["ecker"]["group_column"],
         prototype = "true" if config["prototype"]["enabled"] else "false",
@@ -186,8 +187,9 @@ checkpoint ecker_make_manifest:
             --meta {input.meta} \
             --raw_dir {params.raw_dir} \
             --cells_dir {params.cells_dir} \
-            --region {params.region} \
+            --region_filter {params.region_filter} \
             --proto_cell_types "{params.proto_cell_types}" \
+            --proto_regions "{params.proto_regions}" \
             --cells_per_group {params.cells_per_group} \
             --group_col {params.group_col} \
             --prototype {params.prototype} \
@@ -341,24 +343,24 @@ def _ecker_all_cell_tsvs(wildcards):
 
 
 rule ecker_per_combo_manifest:
-    """Sub-manifest for one (sub_region, sub_type) combo."""
+    """Sub-manifest for one (region, sub_type) combo."""
     conda:
         op.join("..", "envs", "python.yml")
     input:
         cells = op.join(ECKER_DATA, "cells.tsv"),
     output:
         manifest = op.join(ECKER_DATA, "manifests",
-                           "{sub_region}_{sub_type}.tsv"),
+                           "{region}_{sub_type}.tsv"),
     params:
         max_cells = max_cells_per_combo(),
     log:
         op.join(ECKER_DATA, "logs",
-                "manifest_{sub_region}_{sub_type}.log"),
+                "manifest_{region}_{sub_type}.log"),
     shell:
         """
         python {workflow.basedir}/scripts/ecker_subset_manifest.py \
             --cells {input.cells} \
-            --sub-region {wildcards.sub_region} \
+            --region {wildcards.region} \
             --sub-type {wildcards.sub_type} \
             --max-cells {params.max_cells} \
             --out {output.manifest} &> {log}
@@ -366,11 +368,11 @@ rule ecker_per_combo_manifest:
 
 
 def _ecker_combo_cell_tsvs(wildcards):
-    """Per-cell tsv.gz paths for one (sub_region, sub_type) combo. Reads the
+    """Per-cell tsv.gz paths for one (region, sub_type) combo. Reads the
     per-combo sub-manifest produced by ecker_per_combo_manifest."""
     import csv
     sub_path = op.join(ECKER_DATA, "manifests",
-                       f"{wildcards.sub_region}_{wildcards.sub_type}.tsv")
+                       f"{wildcards.region}_{wildcards.sub_type}.tsv")
     if not op.exists(sub_path):
         ## Snakemake hasn't built it yet; cell_files dependency is satisfied
         ## at execution time via the manifest input dependency.
@@ -381,7 +383,7 @@ def _ecker_combo_cell_tsvs(wildcards):
 
 
 rule run_amet_on_ecker_features:
-    """Run amet on one (annotation, sub_region, sub_type) combo."""
+    """Run amet on one (annotation, region, sub_type) combo."""
     wildcard_constraints:
         annotation = "|".join(_ECKER_ALL_ANN_NAMES),
     conda:
@@ -389,7 +391,7 @@ rule run_amet_on_ecker_features:
     input:
         binary = AMET,
         cells = op.join(ECKER_DATA, "manifests",
-                        "{sub_region}_{sub_type}.tsv"),
+                        "{region}_{sub_type}.tsv"),
         cell_files = _ecker_combo_cell_tsvs,
         genome = op.join(REFS, "mm10_ensembl", "genome.fa"),
         cpg = op.join(REFS, "mm10_ensembl", "genome.fa.cpg"),
@@ -397,14 +399,14 @@ rule run_amet_on_ecker_features:
     output:
         cell_feature = op.join(
             ECKER_RUN, "features",
-            "{annotation}_{sub_region}_{sub_type}.cell_feature.tsv.gz"),
+            "{annotation}_{region}_{sub_type}.cell_feature.tsv.gz"),
         feature = op.join(
             ECKER_RUN, "features",
-            "{annotation}_{sub_region}_{sub_type}.feature.tsv.gz"),
+            "{annotation}_{region}_{sub_type}.feature.tsv.gz"),
     params:
         prefix = op.join(
             ECKER_RUN, "features",
-            "{annotation}_{sub_region}_{sub_type}"),
+            "{annotation}_{region}_{sub_type}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
         min_cells = min_cells_per_group(),
@@ -412,7 +414,7 @@ rule run_amet_on_ecker_features:
     threads: min(workflow.cores, 4)
     log:
         op.join(ECKER_RUN, "logs",
-                "amet_{annotation}_{sub_region}_{sub_type}.log"),
+                "amet_{annotation}_{region}_{sub_type}.log"),
     shell:
         """
         mkdir -p $(dirname {params.prefix})
@@ -471,14 +473,14 @@ rule run_amet_on_ecker_windows:
 
 
 def _ecker_combos():
-    """(sub_region, sub_type) pairs from cells.tsv after the manifest checkpoint.
+    """(region, sub_type) pairs from cells.tsv after the manifest checkpoint.
     Sanitizes both fields by replacing space with '-'."""
     import csv
     manifest_path = checkpoints.ecker_make_manifest.get().output.manifest
     pairs = set()
     with open(manifest_path) as f:
         for row in csv.DictReader(f, delimiter="\t"):
-            sr = row.get("sub_region")
+            sr = row.get("region")
             st = row.get("sub_type")
             if sr and st:
                 pairs.add((str(sr).replace(" ", "-"),

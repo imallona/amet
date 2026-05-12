@@ -9,11 +9,23 @@ opt <- parse_args(OptionParser(option_list = list(
     make_option("--metadata",   type = "character"),
     make_option("--cells_dir",  type = "character"),
     make_option("--group_col",  type = "character", default = "lineage10x"),
+    make_option("--proto_stages",   type = "character", default = ""),
+    make_option("--proto_lineages", type = "character", default = ""),
+    make_option("--prototype",  type = "character", default = "false"),
     make_option("--out",        type = "character")
 )))
 
+prototype <- tolower(opt$prototype) %in% c("true", "1", "yes")
+stages_keep   <- if (nchar(opt$proto_stages))   strsplit(opt$proto_stages,   ",")[[1]] else character()
+lineages_keep <- if (nchar(opt$proto_lineages)) strsplit(opt$proto_lineages, ",")[[1]] else character()
+
 meta <- fread(opt$metadata, sep = "\t", header = TRUE)
 meta <- meta[pass_metQC == TRUE & !is.na(id_met)]
+
+if (prototype) {
+    if (length(stages_keep))   meta <- meta[stage %in% stages_keep]
+    if (length(lineages_keep)) meta <- meta[get(opt$group_col) %in% lineages_keep]
+}
 
 files <- list.files(opt$cells_dir, pattern = "\\.tsv\\.gz$", full.names = TRUE)
 ids   <- sub("\\.tsv\\.gz$", "", basename(files))

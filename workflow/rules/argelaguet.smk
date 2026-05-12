@@ -101,6 +101,9 @@ checkpoint make_argelaguet_manifest:
     params:
         cells_dir = ARG_CELLS,
         group_col = config["argelaguet"]["group_column"],
+        proto_stages = proto_csv("argelaguet", "proto_stages"),
+        proto_lineages = proto_csv("argelaguet", "proto_lineages"),
+        prototype = "true" if config["prototype"]["enabled"] else "false",
     log:
         op.join(ARG_DATA, "logs", "manifest.log"),
     shell:
@@ -109,6 +112,9 @@ checkpoint make_argelaguet_manifest:
             --metadata {input.meta} \
             --cells_dir {params.cells_dir} \
             --group_col {params.group_col} \
+            --proto_stages "{params.proto_stages}" \
+            --proto_lineages "{params.proto_lineages}" \
+            --prototype {params.prototype} \
             --out {output.manifest} &> {log}
         """
 

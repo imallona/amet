@@ -91,7 +91,7 @@ knitr::opts_chunk$set(
 ```
 
 ## Cell selection upstream of this Rmd:
-##   Per (sub_region, sub_type) stratum, cells are picked by source-TAR size
+##   Per (region, sub_type) stratum, cells are picked by source-TAR size
 ##   (proxy for observed-CpG coverage; tar contains one allc tsv.gz per cell)
 ##   with plate-stratified round-robin so a single sequencing plate cannot
 ##   dominate the pick. Cap = max_cells_per_combo (config/datasets.yaml:
@@ -109,7 +109,7 @@ cat("Major types:", length(unique(man$major_type)), "\n")
 ## + mean_meth, and per-window-per-group jsd (loaded but not used in this
 ## Rmd, kept for symmetry with the per-feature reports).
 win_cf <- fread(params$win_cell_feature)
-keep_cols <- intersect(c("cell_id", "cell_class", "major_type", "sub_region", "sub_type"),
+keep_cols <- intersect(c("cell_id", "cell_class", "major_type", "region", "sub_type"),
                        colnames(man))
 win_cf <- merge(win_cf, man[, ..keep_cols],
                 by = "cell_id", all.x = TRUE)

@@ -1,6 +1,6 @@
-"""Subset cells.tsv to one (sub_region, sub_type) combo for Ecker.
+"""Subset cells.tsv to one (region, sub_type) combo for Ecker.
 
-Filter to the sanitized (sub_region, sub_type) pair, then keep the top
+Filter to the sanitized (region, sub_type) pair, then keep the top
 --max-cells cells ranked by the `size` column (coverage proxy: source TAR
 size, written by the manifest builder) with plate-stratified round-robin:
 within each plate cells are ranked by size; across plates the max-cells
@@ -13,7 +13,7 @@ the smk rules use (e.g. "IT-L23 Cux1" -> "IT-L23-Cux1").
 Usage:
     python ecker_subset_manifest.py \
         --cells cells.tsv \
-        --sub-region MOp --sub-type "IT-L23-Cux1" \
+        --region MOp --sub-type "IT-L23-Cux1" \
         --max-cells 50 \
         --out manifests/MOp_IT-L23-Cux1.tsv
 """
@@ -24,7 +24,7 @@ import os
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--cells", required=True)
-ap.add_argument("--sub-region", required=True)
+ap.add_argument("--region", required=True)
 ap.add_argument("--sub-type", required=True)
 ap.add_argument("--max-cells", type=int, default=50)
 ap.add_argument("--out", required=True)
@@ -41,7 +41,7 @@ with open(args.cells) as f:
     rows = list(reader)
 
 sub = [r for r in rows
-       if sanitize(r.get("sub_region", "")) == args.sub_region
+       if sanitize(r.get("region", "")) == args.region
        and sanitize(r.get("sub_type", "")) == args.sub_type]
 
 
@@ -90,4 +90,4 @@ with open(args.out, "w", newline="") as f:
     for r in sub:
         w.writerow(r)
 
-print(f"[ecker_subset] {args.sub_region}/{args.sub_type}: {len(sub)} cells -> {args.out}")
+print(f"[ecker_subset] {args.region}/{args.sub_type}: {len(sub)} cells -> {args.out}")

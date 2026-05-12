@@ -144,7 +144,7 @@ col_data <- merge(col_data, as.data.frame(man),
                   by = "cell_id", all.x = TRUE)
 col_data$cell_class <- factor(col_data$cell_class)
 col_data$major_type <- factor(col_data$major_type)
-col_data$sub_region <- factor(col_data$sub_region)
+col_data$region <- factor(col_data$region)
 col_data$sub_type <- factor(col_data$sub_type)
 rownames(col_data) <- col_data$cell_id
 
@@ -424,7 +424,7 @@ sil_win <- data.frame(
               col_data$cell_class[ok_embeds[[lbl]]$kept_cols])),
   silhouette_sub_region = sapply(names(ok_embeds), function(lbl)
     sil_score(ok_embeds[[lbl]]$umap,
-              col_data$sub_region[ok_embeds[[lbl]]$kept_cols]))
+              col_data$region[ok_embeds[[lbl]]$kept_cols]))
 )
 
 sil_long <- pivot_longer(sil_win, c("silhouette_cell_class", "silhouette_sub_region"),
@@ -435,7 +435,7 @@ sil_long$assay <- factor(sil_long$assay, levels = assay_map)
 ggplot(sil_long, aes(x = assay, y = silhouette, fill = grouping)) +
   geom_col(position = position_dodge(width = 0.8)) +
   geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
-  scale_fill_manual(values = c("cell_class" = "#0072B2", "sub_region" = "#E69F00")) +
+  scale_fill_manual(values = c("cell_class" = "#0072B2", "region" = "#E69F00")) +
   labs(x = NULL, y = "mean silhouette",
        title = "Cluster separation by assay") +
   theme_ng()
@@ -446,7 +446,7 @@ ggplot(sil_long, aes(x = assay, y = silhouette, fill = grouping)) +
 ```{r cell_df}
 cell_df <- data.frame(
   cell_class = col_data$cell_class,
-  sub_region = col_data$sub_region,
+  region = col_data$region,
   mean_i_total = colMeans(assays_list$i_total, na.rm = TRUE),
   mean_meth = colMeans(assays_list$meth,    na.rm = TRUE)
 )

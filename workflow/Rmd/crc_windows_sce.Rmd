@@ -24,8 +24,7 @@ params:
 ---
 
 ```{r logging_early, include = FALSE}
-source(file.path(dirname(knitr::current_input()), "..", "scripts",
-                 "render_logging.R"))
+source(Sys.getenv("AMET_RENDER_HELPERS"))
 amet_setup_render_logging(params$log_path)
 ```
 

@@ -443,21 +443,23 @@ def list_ecker_features_outputs(wildcards):
 
 
 def _ecker_render_shell():
-    return r"""
-        mkdir -p {params.out_dir}
-        Rscript -e 'rmarkdown::render("{input.rmd}",
-            output_file="{params.rmd_name}.html",
-            output_dir="{params.out_dir}",
-            knit_root_dir="{params.out_dir}",
+    helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R")
+    return rf"""
+        mkdir -p {{params.out_dir}}
+        export AMET_RENDER_HELPERS="{helpers}"
+        Rscript -e 'rmarkdown::render("{{input.rmd}}",
+            output_file="{{params.rmd_name}}.html",
+            output_dir="{{params.out_dir}}",
+            knit_root_dir="{{params.out_dir}}",
             params=list(
-                features_dir="{params.features_dir}",
-                win_cell_feature="{input.win_cell_feature}",
-                win_feature="{input.win_feature}",
-                win_bed="{input.win_bed}",
-                manifest="{input.manifest}",
-                out_dir="{params.out_dir}",
-                log_path="{log}"),
-            quiet=TRUE)' &> {log}
+                features_dir="{{params.features_dir}}",
+                win_cell_feature="{{input.win_cell_feature}}",
+                win_feature="{{input.win_feature}}",
+                win_bed="{{input.win_bed}}",
+                manifest="{{input.manifest}}",
+                out_dir="{{params.out_dir}}",
+                log_path="{{log}}"),
+            quiet=TRUE)' &> {{log}}
         """
 
 

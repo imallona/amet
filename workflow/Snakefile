@@ -94,15 +94,19 @@ rule ecker:
 rule render_simulations_report:
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "simulations_report.Rmd"),
+        helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R"),
         evals = EVAL_OUTPUTS,
     output: SIM_REPORT_HTML
     conda: R_TOOLS_ENV
     params:
         eval_dir = op.join(SIM, "eval"),
         out_dir = SIM,
+    log: op.join(SIM, "logs", "render_simulations_report.log")
     shell:
         r"""
-        Rscript -e 'rmarkdown::render("{input.rmd}", output_file="simulations_report.html", output_dir="{params.out_dir}", params=list(eval_dir="{params.eval_dir}"), quiet=TRUE)'
+        mkdir -p {params.out_dir} $(dirname {log})
+        export AMET_RENDER_HELPERS="{input.helpers}"
+        Rscript -e 'rmarkdown::render("{input.rmd}", output_file="simulations_report.html", output_dir="{params.out_dir}", params=list(eval_dir="{params.eval_dir}", log_path="{log}"), quiet=TRUE)' &> {log}
         """
 
 

@@ -15,14 +15,52 @@ params:
   win_cell_feature: ""
   win_feature: ""
   win_bed: ""
+  windows_annotation: ""
   manifest: ""
   out_dir: ""
   log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
 
 ```{r logging_early, include = FALSE}
 source(Sys.getenv("AMET_RENDER_HELPERS"))
-amet_setup_render_logging(params$log_path)
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
+
+```{r load_window_annotation}
+suppressPackageStartupMessages({
+  library(data.table)
+})
+data.table::setDTthreads(params$threads)
+
+ann_mat <- NULL
+ann_bin <- NULL
+ann_cols <- character(0)
+ann_path <- params$windows_annotation
+if (is.character(ann_path) && nzchar(ann_path) && file.exists(ann_path)) {
+  ann_tbl <- tryCatch(
+    fread(ann_path, sep = "\t", header = TRUE, nThread = params$threads),
+    error = function(e) {
+      message("[ecker_embeddings] failed to read windows_annotation: ", conditionMessage(e))
+      NULL
+    })
+  if (!is.null(ann_tbl) && nrow(ann_tbl) > 0L &&
+      "feature_id" %in% colnames(ann_tbl)) {
+    keep <- setdiff(colnames(ann_tbl), c("chrom", "start", "end", "feature_id"))
+    if (length(keep) > 0L) {
+      ann_mat <- as.data.frame(ann_tbl[, c("feature_id", keep), with = FALSE])
+      rownames(ann_mat) <- ann_mat$feature_id
+      ann_cols <- keep
+      ann_bin <- as.data.frame(lapply(ann_mat[, ann_cols, drop = FALSE],
+                                      function(x) as.integer(x > 0)))
+      colnames(ann_bin) <- paste0(ann_cols, "_bin")
+      rownames(ann_bin) <- ann_mat$feature_id
+    }
+  }
+}
+cat("Annotation columns:", length(ann_cols),
+    "| windows annotated:", if (is.null(ann_mat)) 0L else nrow(ann_mat), "\n")
 ```
 
 ```{r setup}
@@ -49,7 +87,6 @@ source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 source(file.path(repo_root, "workflow", "scripts", "embedding_utils.R"))
 
-param <- SerialParam()
 
 knitr::opts_chunk$set(
   echo = TRUE,
@@ -64,8 +101,8 @@ knitr::opts_chunk$set(
 N_HVW <- 1000
 N_PCS <- 10
 
-## Only the methylation-stable amet score (i_total) and methylation are
-## carried forward; raw S and adjS variants are not exported.
+## amet exposes i_total per cell per window and mean_meth per cell per window;
+## both are carried forward as separate assays for the embeddings.
 assay_map <- c(
   "i_total" = "i_total",
   "meth"    = "methylation"
@@ -108,7 +145,7 @@ col_data <- merge(col_data, as.data.frame(man),
 col_data$cell_class <- factor(col_data$cell_class)
 col_data$major_type <- factor(col_data$major_type)
 col_data$sub_region <- factor(col_data$sub_region)
-col_data$sub_type   <- factor(col_data$sub_type)
+col_data$sub_type <- factor(col_data$sub_type)
 rownames(col_data) <- col_data$cell_id
 
 cc_lvls <- sort(unique(as.character(col_data$cell_class)))
@@ -125,7 +162,7 @@ build_assay_mat <- function(value_col) {
 
 assays_list <- list(
   i_total = build_assay_mat("i_total"),
-  meth    = build_assay_mat("mean_meth")
+  meth = build_assay_mat("mean_meth")
 )
 
 cat("Cells:", nrow(col_data), "\n")
@@ -145,7 +182,7 @@ hvw_pca_umap <- function(mat) {
 
 plot_umap_cellclass <- function(coords, kept_cols, title_prefix) {
   df <- data.frame(
-    umap1      = coords[, 1], umap2 = coords[, 2],
+    umap1 = coords[, 1], umap2 = coords[, 2],
     cell_class = col_data$cell_class[kept_cols]
   )
   ggplot(df, aes(x = umap1, y = umap2, color = cell_class)) +
@@ -159,7 +196,7 @@ plot_umap_cellclass <- function(coords, kept_cols, title_prefix) {
 
 plot_umap_majortype <- function(coords, kept_cols, title_prefix) {
   df <- data.frame(
-    umap1      = coords[, 1], umap2 = coords[, 2],
+    umap1 = coords[, 1], umap2 = coords[, 2],
     major_type = col_data$major_type[kept_cols]
   )
   ggplot(df, aes(x = umap1, y = umap2, color = major_type)) +
@@ -200,23 +237,23 @@ for (nm in names(win_embeds)) {
 }
 
 saveRDS(
-  list(col_data    = col_data,
-       n_windows   = nrow(assays_list$i_total),
-       n_cells     = nrow(col_data),
+  list(col_data = col_data,
+       n_windows = nrow(assays_list$i_total),
+       n_cells = nrow(col_data),
        assay_names = names(assays_list),
-       win_embeds  = win_embeds,
-       assay_map   = assay_map),
+       win_embeds = win_embeds,
+       assay_map = assay_map),
   "ecker_umap_windows_i_total.rds", compress = "xz"
 )
 ```
 
 ```{r per_cell_summary}
 per_cell_summary <- data.frame(
-  cell_id      = col_data$cell_id,
-  cell_class   = col_data$cell_class,
-  major_type   = col_data$major_type,
-  sub_type     = col_data$sub_type,
-  mean_meth    = colMeans(assays_list$meth,    na.rm = TRUE),
+  cell_id = col_data$cell_id,
+  cell_class = col_data$cell_class,
+  major_type = col_data$major_type,
+  sub_type = col_data$sub_type,
+  mean_meth = colMeans(assays_list$meth,    na.rm = TRUE),
   mean_i_total = colMeans(assays_list$i_total, na.rm = TRUE),
   stringsAsFactors = FALSE
 )
@@ -225,7 +262,6 @@ write.csv(per_cell_summary, "ecker_embeddings_per_cell_summary.csv", row.names =
 
 ## By cell class {.tabset .tabset-pills}
 
-<!-- Section dropped: amet has no raw S, so the win_cc_S chunk is not reproduced. -->
 
 ```{r win_cc_i_total, fig.width = ng_fig_size(2, 1, panel_mm = 60)$w, fig.height = ng_fig_size(2, 1, panel_mm = 60)$h}
 ### i_total
@@ -255,9 +291,9 @@ if (!is.null(win_embeds[["methylation"]])) {
 ok_embeds <- Filter(Negate(is.null), win_embeds)
 df_panel <- bind_rows(lapply(names(ok_embeds), function(lbl) {
   em <- ok_embeds[[lbl]]
-  data.frame(umap1      = em$umap[, 1], umap2 = em$umap[, 2],
+  data.frame(umap1 = em$umap[, 1], umap2 = em$umap[, 2],
              cell_class = col_data$cell_class[em$kept_cols],
-             assay      = lbl)
+             assay = lbl)
 }))
 df_panel$assay <- factor(df_panel$assay, levels = assay_map)
 
@@ -280,9 +316,9 @@ ve_win <- bind_rows(lapply(names(assay_map), function(akey) {
   kept <- win_embeds[[lbl]]$kept_cols
   hvw_mat <- assays_list[[akey]][win_embeds[[lbl]]$hvf_idx, kept, drop = FALSE]
   data.frame(
-    assay      = lbl,
+    assay = lbl,
     cell_class = median(row_variance_explained(hvw_mat, col_data$cell_class[kept]), na.rm = TRUE),
-    sub_type   = median(row_variance_explained(hvw_mat, col_data$sub_type[kept]),   na.rm = TRUE))
+    sub_type = median(row_variance_explained(hvw_mat, col_data$sub_type[kept]),   na.rm = TRUE))
 }))
 
 ve_long <- pivot_longer(ve_win, c("cell_class", "sub_type"),
@@ -314,10 +350,10 @@ na_stats <- function(mat) {
   na_frac_row <- rowMeans(is.na(mat))
   na_frac_col <- colMeans(is.na(mat))
   list(
-    row_na_median   = median(na_frac_row, na.rm = TRUE),
-    row_na_p90      = quantile(na_frac_row, 0.9, na.rm = TRUE),
-    col_na_median   = median(na_frac_col, na.rm = TRUE),
-    col_na_p90      = quantile(na_frac_col, 0.9, na.rm = TRUE),
+    row_na_median = median(na_frac_row, na.rm = TRUE),
+    row_na_p90 = quantile(na_frac_row, 0.9, na.rm = TRUE),
+    col_na_median = median(na_frac_col, na.rm = TRUE),
+    col_na_p90 = quantile(na_frac_col, 0.9, na.rm = TRUE),
     n_complete_rows = sum(na_frac_row == 0, na.rm = TRUE)
   )
 }
@@ -325,32 +361,32 @@ na_stats <- function(mat) {
 for (akey in names(assay_map)) {
   lbl <- assay_map[[akey]]
   if (!akey %in% names(assays_list)) next
-  em  <- win_embeds[[lbl]]
+  em <- win_embeds[[lbl]]
   if (is.null(em)) next
 
-  mat  <- assays_list[[akey]]
-  ns   <- na_stats(mat)
+  mat <- assays_list[[akey]]
+  ns <- na_stats(mat)
 
   hvf_mat <- mat[em$hvf_idx, em$kept_cols, drop = FALSE]
   hvf_row_var <- matrixStats::rowVars(hvf_mat, na.rm = TRUE)
 
   diag_rows[[lbl]] <- data.frame(
-    assay                  = lbl,
-    stage                  = em$stage,
-    n_cells_total          = nrow(col_data),
-    n_cells_used           = sum(em$kept_cols),
+    assay = lbl,
+    stage = em$stage,
+    n_cells_total = nrow(col_data),
+    n_cells_used = sum(em$kept_cols),
     cells_dropped_fraction = 1 - sum(em$kept_cols) / nrow(col_data),
-    n_windows_total        = nrow(mat),
-    n_complete_rows        = ns$n_complete_rows,
-    row_na_median          = ns$row_na_median,
-    row_na_p90             = as.numeric(ns$row_na_p90),
-    col_na_median          = ns$col_na_median,
-    col_na_p90             = as.numeric(ns$col_na_p90),
-    n_hvf                  = length(em$hvf_idx),
-    hvf_var_median         = median(hvf_row_var, na.rm = TRUE),
-    hvf_var_q25            = quantile(hvf_row_var, 0.25, na.rm = TRUE),
-    hvf_var_q75            = quantile(hvf_row_var, 0.75, na.rm = TRUE),
-    stringsAsFactors       = FALSE
+    n_windows_total = nrow(mat),
+    n_complete_rows = ns$n_complete_rows,
+    row_na_median = ns$row_na_median,
+    row_na_p90 = as.numeric(ns$row_na_p90),
+    col_na_median = ns$col_na_median,
+    col_na_p90 = as.numeric(ns$col_na_p90),
+    n_hvf = length(em$hvf_idx),
+    hvf_var_median = median(hvf_row_var, na.rm = TRUE),
+    hvf_var_q25 = quantile(hvf_row_var, 0.25, na.rm = TRUE),
+    hvf_var_q75 = quantile(hvf_row_var, 0.75, na.rm = TRUE),
+    stringsAsFactors = FALSE
   )
 }
 
@@ -394,7 +430,7 @@ sil_win <- data.frame(
 sil_long <- pivot_longer(sil_win, c("silhouette_cell_class", "silhouette_sub_region"),
                          names_to = "grouping", values_to = "silhouette")
 sil_long$grouping <- sub("silhouette_", "", sil_long$grouping)
-sil_long$assay    <- factor(sil_long$assay, levels = assay_map)
+sil_long$assay <- factor(sil_long$assay, levels = assay_map)
 
 ggplot(sil_long, aes(x = assay, y = silhouette, fill = grouping)) +
   geom_col(position = position_dodge(width = 0.8)) +
@@ -409,10 +445,10 @@ ggplot(sil_long, aes(x = assay, y = silhouette, fill = grouping)) +
 
 ```{r cell_df}
 cell_df <- data.frame(
-  cell_class   = col_data$cell_class,
-  sub_region   = col_data$sub_region,
+  cell_class = col_data$cell_class,
+  sub_region = col_data$sub_region,
   mean_i_total = colMeans(assays_list$i_total, na.rm = TRUE),
-  mean_meth    = colMeans(assays_list$meth,    na.rm = TRUE)
+  mean_meth = colMeans(assays_list$meth,    na.rm = TRUE)
 )
 ```
 
@@ -428,6 +464,173 @@ ggplot(cell_long, aes(x = cell_class, y = value, fill = cell_class)) +
   labs(x = "cell class", y = "per-cell mean") +
   theme_ng() +
   theme(legend.position = "none")
+```
+
+# Per-locus embeddings (windows as observations)
+
+Each window is embedded from its per-cell i_total vector. Points are
+coloured by binarised annotation overlap. Cells with too few covered
+windows or windows with too many missing cells are dropped in
+`run_embedding`. Annotation-driven panels are skipped if `ann_bin`
+is empty.
+
+```{r locus_umap_i_total_data}
+i_total_window_embed <- NULL
+if (nrow(assays_list$i_total) > 0L) {
+  i_total_window_embed <- tryCatch(
+    run_embedding(t(assays_list$i_total), n_hvf = N_HVW, n_pcs = N_PCS,
+                  n_neighbors = 15L, min_dist = 0.3, seed = 42L),
+    error = function(e) {
+      message("[locus_umap_i_total] failed: ", conditionMessage(e)); NULL })
+}
+```
+
+```{r locus_umap_i_total_plot, fig.width = ng_fig_size(3, 1, panel_mm = 55)$w, fig.height = ng_fig_size(3, 1, panel_mm = 55)$h}
+if (is.null(i_total_window_embed)) {
+  cat("Per-locus i_total UMAP unavailable.\n")
+} else if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
+  cat("Annotation matrix empty; rendering per-locus i_total UMAP without annotation overlay.\n")
+  df <- data.frame(UMAP1 = i_total_window_embed$umap[, 1],
+                   UMAP2 = i_total_window_embed$umap[, 2])
+  print(ggplot(df, aes(UMAP1, UMAP2)) +
+          geom_point_rast(size = 0.15, alpha = 0.4, raster.dpi = 300) +
+          labs(title = "per-locus i_total UMAP") + theme_ng())
+} else {
+  win_names <- rownames(assays_list$i_total)[i_total_window_embed$kept_cols]
+  ann_aligned <- ann_bin[match(win_names, rownames(ann_bin)), , drop = FALSE]
+  df_base <- data.frame(UMAP1 = i_total_window_embed$umap[, 1],
+                        UMAP2 = i_total_window_embed$umap[, 2],
+                        feature_id = win_names)
+  panels <- lapply(colnames(ann_aligned), function(cn) {
+    df <- df_base
+    df$overlap <- factor(ann_aligned[[cn]], levels = c(0, 1))
+    ggplot(df, aes(UMAP1, UMAP2, color = overlap)) +
+      geom_point_rast(size = 0.12, alpha = 0.55, raster.dpi = 300) +
+      scale_color_manual(values = c("0" = "#bbbbbb", "1" = "#d95f02"),
+                         na.value = "#eeeeee", drop = FALSE) +
+      labs(title = sub("_bin$", "", cn)) +
+      theme_ng(base_size = 7) +
+      theme(legend.position = "none",
+            plot.title = element_text(size = 6.5))
+  })
+  print(plot_grid(plotlist = panels, ncol = 3))
+}
+```
+
+```{r locus_umap_i_norm_data}
+## Canonical i_norm: i_total / (k_max * H(mean_meth)) per (window, cell).
+## H is binary Shannon entropy. k_max comes from amet's --i-max-lag via params.
+i_total_mat <- as.matrix(assays_list$i_total)
+meth_mat <- as.matrix(assays_list$meth)
+i_norm_mat <- matrix(NA_real_, nrow(i_total_mat), ncol(i_total_mat),
+                     dimnames = dimnames(i_total_mat))
+for (j in seq_len(ncol(i_total_mat))) {
+  i_norm_mat[, j] <- compute_i_norm(i_total_mat[, j], meth_mat[, j],
+                                    params$i_max_lag)
+}
+
+i_norm_window_embed <- NULL
+if (nrow(i_norm_mat) > 0L && sum(is.finite(i_norm_mat)) > 0L) {
+  i_norm_window_embed <- tryCatch(
+    run_embedding(t(i_norm_mat), n_hvf = N_HVW, n_pcs = N_PCS,
+                  n_neighbors = 15L, min_dist = 0.3, seed = 42L),
+    error = function(e) {
+      message("[locus_umap_i_norm] failed: ", conditionMessage(e)); NULL })
+}
+```
+
+```{r locus_umap_i_norm_plot, fig.width = ng_fig_size(3, 1, panel_mm = 55)$w, fig.height = ng_fig_size(3, 1, panel_mm = 55)$h}
+if (is.null(i_norm_window_embed)) {
+  cat("Per-locus i_norm UMAP unavailable.\n")
+} else if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
+  df <- data.frame(UMAP1 = i_norm_window_embed$umap[, 1],
+                   UMAP2 = i_norm_window_embed$umap[, 2])
+  print(ggplot(df, aes(UMAP1, UMAP2)) +
+          geom_point_rast(size = 0.15, alpha = 0.4, raster.dpi = 300) +
+          labs(title = "per-locus i_norm UMAP") + theme_ng())
+} else {
+  win_names <- rownames(i_norm_mat)[i_norm_window_embed$kept_cols]
+  ann_aligned <- ann_bin[match(win_names, rownames(ann_bin)), , drop = FALSE]
+  df_base <- data.frame(UMAP1 = i_norm_window_embed$umap[, 1],
+                        UMAP2 = i_norm_window_embed$umap[, 2],
+                        feature_id = win_names)
+  panels <- lapply(colnames(ann_aligned), function(cn) {
+    df <- df_base
+    df$overlap <- factor(ann_aligned[[cn]], levels = c(0, 1))
+    ggplot(df, aes(UMAP1, UMAP2, color = overlap)) +
+      geom_point_rast(size = 0.12, alpha = 0.55, raster.dpi = 300) +
+      scale_color_manual(values = c("0" = "#bbbbbb", "1" = "#0072B2"),
+                         na.value = "#eeeeee", drop = FALSE) +
+      labs(title = sub("_bin$", "", cn)) +
+      theme_ng(base_size = 7) +
+      theme(legend.position = "none",
+            plot.title = element_text(size = 6.5))
+  })
+  print(plot_grid(plotlist = panels, ncol = 3))
+}
+```
+
+```{r locus_umap_jsd_data}
+## Per-locus jsd UMAP: each window has one jsd per group; embed windows in
+## group-space. Requires the windows-feature TSV (one row per (window, group)).
+jsd_window_embed <- NULL
+jsd_window_names <- character(0)
+if (file.exists(params$win_feature)) {
+  jsd_tbl <- tryCatch(
+    fread(params$win_feature, nThread = params$threads),
+    error = function(e) { message("[locus_umap_jsd] read failed: ", conditionMessage(e)); NULL })
+  if (!is.null(jsd_tbl) && "jsd" %in% colnames(jsd_tbl) &&
+      "feature_id" %in% colnames(jsd_tbl) && "group" %in% colnames(jsd_tbl)) {
+    jsd_wide <- tryCatch(
+      dcast(jsd_tbl, feature_id ~ group, value.var = "jsd", fun.aggregate = mean),
+      error = function(e) { message("[locus_umap_jsd] dcast failed: ", conditionMessage(e)); NULL })
+    if (!is.null(jsd_wide) && nrow(jsd_wide) > 0L && ncol(jsd_wide) > 1L) {
+      jsd_window_names <- jsd_wide$feature_id
+      jsd_mat <- as.matrix(jsd_wide[, -1, with = FALSE])
+      jsd_mat[!is.finite(jsd_mat)] <- NA
+      rownames(jsd_mat) <- jsd_window_names
+      ## run_embedding expects features x cells; we want windows as
+      ## observations, so groups become "features" via transpose.
+      jsd_window_embed <- tryCatch(
+        run_embedding(t(jsd_mat), n_hvf = N_HVW,
+                      n_pcs = max(2L, min(N_PCS, ncol(jsd_mat) - 1L)),
+                      n_neighbors = 15L, min_dist = 0.3, seed = 42L),
+        error = function(e) {
+          message("[locus_umap_jsd] embed failed: ", conditionMessage(e)); NULL })
+    }
+  }
+}
+```
+
+```{r locus_umap_jsd_plot, fig.width = ng_fig_size(3, 1, panel_mm = 55)$w, fig.height = ng_fig_size(3, 1, panel_mm = 55)$h}
+if (is.null(jsd_window_embed)) {
+  cat("Per-locus jsd UMAP unavailable.\n")
+} else if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
+  df <- data.frame(UMAP1 = jsd_window_embed$umap[, 1],
+                   UMAP2 = jsd_window_embed$umap[, 2])
+  print(ggplot(df, aes(UMAP1, UMAP2)) +
+          geom_point_rast(size = 0.15, alpha = 0.4, raster.dpi = 300) +
+          labs(title = "per-locus jsd UMAP") + theme_ng())
+} else {
+  win_names <- jsd_window_names[jsd_window_embed$kept_cols]
+  ann_aligned <- ann_bin[match(win_names, rownames(ann_bin)), , drop = FALSE]
+  df_base <- data.frame(UMAP1 = jsd_window_embed$umap[, 1],
+                        UMAP2 = jsd_window_embed$umap[, 2],
+                        feature_id = win_names)
+  panels <- lapply(colnames(ann_aligned), function(cn) {
+    df <- df_base
+    df$overlap <- factor(ann_aligned[[cn]], levels = c(0, 1))
+    ggplot(df, aes(UMAP1, UMAP2, color = overlap)) +
+      geom_point_rast(size = 0.12, alpha = 0.55, raster.dpi = 300) +
+      scale_color_manual(values = c("0" = "#bbbbbb", "1" = "#1b9e77"),
+                         na.value = "#eeeeee", drop = FALSE) +
+      labs(title = sub("_bin$", "", cn)) +
+      theme_ng(base_size = 7) +
+      theme(legend.position = "none",
+            plot.title = element_text(size = 6.5))
+  })
+  print(plot_grid(plotlist = panels, ncol = 3))
+}
 ```
 
 ```{r session}

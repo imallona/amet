@@ -273,6 +273,62 @@ rule run_amet_on_argelaguet_features:
         """
 
 
+rule argelaguet_window_annotation_per_annotation:
+    """Per-window fractional coverage by one annotation. bedtools coverage's
+    7th column is the fraction of the window covered by features in the
+    annotation BED. Header line carries the annotation name so the combine
+    step can paste columns by position."""
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    wildcard_constraints:
+        annotation = "|".join(_ALL_ARGELAGUET_ANN_NAMES),
+    input:
+        windows = op.join(ARG_RUN, "beds", "windows.bed"),
+        annotation = op.join(ARG_RUN, "beds", "{annotation}.bed"),
+    output:
+        frac = temp(op.join(ARG_RUN, "beds", "annotation_cov",
+                            "{annotation}.frac")),
+    log:
+        op.join(ARG_RUN, "logs", "window_annotation_{annotation}.log"),
+    shell:
+        r"""
+        mkdir -p $(dirname {output.frac})
+        echo "{wildcards.annotation}" > {output.frac}
+        bedtools coverage -a {input.windows} -b {input.annotation} \
+            2> {log} | cut -f7 >> {output.frac}
+        """
+
+
+rule argelaguet_combine_window_annotations:
+    """Stitch the per-annotation fractional-coverage columns onto the windows
+    BED. Output is a header-tagged TSV: chrom, start, end, feature_id, then
+    one column per annotation. Drives the per-window annotation matrix used
+    by the Rmds that colour windows by genomic context."""
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    input:
+        windows = op.join(ARG_RUN, "beds", "windows.bed"),
+        fracs = expand(
+            op.join(ARG_RUN, "beds", "annotation_cov", "{annotation}.frac"),
+            annotation = _ALL_ARGELAGUET_ANN_NAMES,
+        ),
+    output:
+        annotation = op.join(ARG_RUN, "beds", "windows_annotation.tsv.gz"),
+    log:
+        op.join(ARG_RUN, "logs", "combine_window_annotations.log"),
+    shell:
+        r"""
+        mkdir -p $(dirname {output.annotation})
+        tmp_header=$(mktemp)
+        tmp_bed=$(mktemp)
+        printf "chrom\tstart\tend\tfeature_id\n" > $tmp_header
+        cat $tmp_header {input.windows} > $tmp_bed
+        paste $tmp_bed {input.fracs} | gzip -c > {output.annotation}
+        rm -f $tmp_header $tmp_bed
+        echo "[combine] wrote $(zcat {output.annotation} | wc -l) rows" > {log}
+        """
+
+
 rule run_amet_on_argelaguet_windows:
     """Run amet over all cells on chr19 windows: one big run, all cells,
     no stratum wildcard."""
@@ -347,8 +403,14 @@ def list_argelaguet_features_outputs(wildcards):
     return out
 
 
-def _argelaguet_render_shell():
+def _argelaguet_render_shell(with_windows_annotation = False):
+    """Shell template for an Argelaguet Rmd render. windows_annotation is
+    optional because the per-feature Rmd does not need a per-window matrix."""
     helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R")
+    i_max_lag = config["amet"]["i_max_lag"]
+    extra = ''
+    if with_windows_annotation:
+        extra = ',\n                windows_annotation="{input.windows_annotation}"'
     return rf"""
         mkdir -p {{params.out_dir}}
         export AMET_RENDER_HELPERS="{helpers}"
@@ -363,7 +425,9 @@ def _argelaguet_render_shell():
                 win_bed="{{input.win_bed}}",
                 manifest="{{input.manifest}}",
                 out_dir="{{params.out_dir}}",
-                log_path="{{log}}"),
+                log_path="{{log}}",
+                threads={{threads}},
+                i_max_lag={i_max_lag}{extra}),
             quiet=TRUE)' &> {{log}}
         """
 
@@ -379,6 +443,7 @@ rule render_argelaguet:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [DRIVER_UTILS_R, EMBEDDING_UTILS_R],
         features = list_argelaguet_features_outputs,
         win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
@@ -398,6 +463,7 @@ rule render_argelaguet:
         features_dir = op.join(ARG_RUN, "features"),
     log:
         op.join(ARG_RUN, "logs", "render_argelaguet.log"),
+    threads: 4
     shell:
         _argelaguet_render_shell()
 
@@ -407,9 +473,11 @@ rule render_argelaguet_windows:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet_windows.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS,
         win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(ARG_RUN, "beds", "windows_annotation.tsv.gz"),
         manifest = op.join(ARG_DATA, "cells.tsv"),
     output:
         html = op.join(ARG_RUN, "argelaguet_windows.html"),
@@ -420,8 +488,9 @@ rule render_argelaguet_windows:
         features_dir = op.join(ARG_RUN, "features"),
     log:
         op.join(ARG_RUN, "logs", "render_argelaguet_windows.log"),
+    threads: 4
     shell:
-        _argelaguet_render_shell()
+        _argelaguet_render_shell(with_windows_annotation = True)
 
 
 rule render_argelaguet_embeddings:
@@ -429,9 +498,11 @@ rule render_argelaguet_embeddings:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet_embeddings.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [EMBEDDING_UTILS_R],
         win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(ARG_RUN, "beds", "windows_annotation.tsv.gz"),
         manifest = op.join(ARG_DATA, "cells.tsv"),
     output:
         html = op.join(ARG_RUN, "argelaguet_embeddings.html"),
@@ -444,8 +515,9 @@ rule render_argelaguet_embeddings:
         features_dir = op.join(ARG_RUN, "features"),
     log:
         op.join(ARG_RUN, "logs", "render_argelaguet_embeddings.log"),
+    threads: 4
     shell:
-        _argelaguet_render_shell()
+        _argelaguet_render_shell(with_windows_annotation = True)
 
 
 rule render_fig_argelaguet_rmd:
@@ -455,6 +527,7 @@ rule render_fig_argelaguet_rmd:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_argelaguet.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [DRIVER_UTILS_R],
         entropy = op.join(ARG_RUN, "argelaguet_entropy.rds"),
         groups_meta = op.join(ARG_RUN, "argelaguet_groups_meta.rds"),
         cell_matrices = op.join(ARG_RUN, "argelaguet_cell_matrices.rds"),
@@ -464,6 +537,7 @@ rule render_fig_argelaguet_rmd:
         win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(ARG_RUN, "beds", "windows_annotation.tsv.gz"),
         manifest = op.join(ARG_DATA, "cells.tsv"),
     output:
         html = op.join(ARG_RUN, "fig_argelaguet.html"),
@@ -473,5 +547,6 @@ rule render_fig_argelaguet_rmd:
         features_dir = op.join(ARG_RUN, "features"),
     log:
         op.join(ARG_RUN, "logs", "render_fig_argelaguet.log"),
+    threads: 4
     shell:
-        _argelaguet_render_shell()
+        _argelaguet_render_shell(with_windows_annotation = True)

@@ -6,6 +6,20 @@ from glob import glob
 
 REFS = op.join(RESULTS, "refs")
 
+## Helper scripts every analytical Rmd sources via source() or via the
+## AMET_RENDER_HELPERS env var. Declared as snakemake inputs so script edits
+## invalidate stale HTMLs. Dataset-specific rules concatenate this with the
+## per-Rmd extras (driver_utils.R, diff_testing.R, embedding_utils.R).
+SCRIPTS_DIR = op.join(REPO_ROOT, "workflow", "scripts")
+RMD_SHARED_SCRIPTS = [
+    op.join(SCRIPTS_DIR, "render_logging.R"),
+    op.join(SCRIPTS_DIR, "plot_theme.R"),
+    op.join(SCRIPTS_DIR, "palettes.R"),
+]
+DRIVER_UTILS_R = op.join(SCRIPTS_DIR, "driver_utils.R")
+EMBEDDING_UTILS_R = op.join(SCRIPTS_DIR, "embedding_utils.R")
+DIFF_TESTING_R = op.join(SCRIPTS_DIR, "diff_testing.R")
+
 METHOD = op.join(REPO_ROOT, "method")
 ## Cargo.lock is gitignored (binary build artifact), so it's not listed as
 ## an input. cargo regenerates it from Cargo.toml on each build.

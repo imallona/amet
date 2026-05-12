@@ -15,14 +15,34 @@ params:
   win_cell_feature: ""
   win_feature: ""
   win_bed: ""
+  windows_annotation: ""
   manifest: ""
   out_dir: ""
   log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
 
 ```{r logging_early, include = FALSE}
 source(Sys.getenv("AMET_RENDER_HELPERS"))
-amet_setup_render_logging(params$log_path)
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
+
+```{r load_window_annotation}
+## Per-window annotation matrix (windows x annotations, fractional overlap).
+## Carried alongside the windows long table so downstream chunks can label or
+## colour windows by genomic context.
+window_annotation <- amet_load_annotation_matrix(params$windows_annotation)
+if (is.null(window_annotation)) {
+  message("[annotation] no per-window annotation matrix; annotation-dependent ",
+          "chunks will be skipped")
+  annotation_cols <- character(0)
+} else {
+  annotation_cols <- setdiff(names(window_annotation),
+                             c("chrom", "start", "end", "feature_id"))
+  cat("Annotations attached to windows:", length(annotation_cols), "\n")
+  cat("Windows in annotation matrix:", nrow(window_annotation), "\n")
+}
 ```
 
 ```{r setup}
@@ -38,7 +58,6 @@ repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."
 source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 
-param <- SerialParam()
 
 knitr::opts_chunk$set(
   echo = TRUE,
@@ -84,20 +103,16 @@ win_cf <- win_cf[feature_id %in% keep_win]
 cat("Windows after NA filter (>= 70% cells covered):", uniqueN(win_cf$feature_id), "\n")
 ```
 
-<!-- Section dropped: amet's i_total is methylation-stable by construction, so no per-window meth-correction step is needed. -->
-
 # QC
 
 ```{r cell_qc_df}
 cell_df <- win_cf[, .(
-  mean_i_total = mean(i_total,  na.rm = TRUE),
-  mean_meth    = mean(mean_meth, na.rm = TRUE)
+  mean_i_total = mean(i_total, na.rm = TRUE),
+  mean_meth = mean(mean_meth, na.rm = TRUE)
 ), by = .(cell_id, stage, lineage)]
 
 write.csv(cell_df, "argelaguet_windows_per_cell_summary.csv", row.names = FALSE)
 ```
-
-<!-- Section dropped: amet has no raw S, so the sampen_by_stage chunk is not reproduced. -->
 
 ```{r itotal_by_stage, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
 ggplot(cell_df, aes(x = stage, y = mean_i_total, fill = stage)) +
@@ -118,6 +133,82 @@ ggplot(cell_df, aes(x = mean_meth, y = mean_i_total, color = stage)) +
   theme_ng(base_size = 8) +
   labs(x = "mean methylation", y = expression("mean " * i[total]),
        title = expression("Global " * i[total] * " vs methylation per cell"))
+```
+
+# Per-annotation window summaries
+
+```{r per_window_itotal, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(2, 1)$h}
+## Per-window mean i_total across all cells, joined to the per-window annotation
+## matrix. For each annotation, summarise the i_total distribution restricted to
+## windows whose annotation coverage exceeds 50% (binary "in / out" cut on the
+## continuous overlap fraction).
+if (length(annotation_cols) == 0L) {
+  cat("Skipping per-annotation window summary: empty annotation matrix.\n")
+} else {
+  win_mean <- win_cf[, .(mean_i_total = mean(i_total, na.rm = TRUE),
+                         mean_meth_win = mean(mean_meth, na.rm = TRUE),
+                         n_cells_observed = .N), by = feature_id]
+  win_mean <- merge(win_mean, window_annotation, by = "feature_id",
+                    all.x = TRUE)
+
+  ann_rows <- lapply(annotation_cols, function(a) {
+    frac <- win_mean[[a]]
+    in_ann <- !is.na(frac) & frac > 0.5
+    if (sum(in_ann) < 5L) return(NULL)
+    data.frame(
+      annotation = a,
+      n_windows = sum(in_ann),
+      median_i_total = median(win_mean$mean_i_total[in_ann], na.rm = TRUE),
+      iqr_i_total = IQR(win_mean$mean_i_total[in_ann], na.rm = TRUE),
+      median_meth = median(win_mean$mean_meth_win[in_ann], na.rm = TRUE)
+    )
+  })
+  ann_summary <- do.call(rbind, ann_rows)
+
+  if (is.null(ann_summary) || nrow(ann_summary) == 0L) {
+    cat("No annotation contains enough overlapping windows for a summary.\n")
+  } else {
+    ann_summary <- ann_summary[order(-ann_summary$median_i_total), ]
+    ann_summary$annotation <- factor(ann_summary$annotation,
+                                     levels = ann_summary$annotation)
+    write.csv(ann_summary, "argelaguet_windows_annotation_summary.csv",
+              row.names = FALSE)
+
+    print(ggplot(ann_summary, aes(x = annotation, y = median_i_total)) +
+      geom_col(fill = "#35b779") +
+      coord_flip() +
+      labs(x = NULL, y = expression("median " * i[total]),
+           title = "Per-annotation median i_total (windows >50% covered)") +
+      theme_ng(base_size = 8))
+  }
+}
+```
+
+```{r itotal_by_annotation_violin, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(3, 1)$h}
+## Distribution of per-window mean i_total, faceted by annotation. Skipped on
+## empty matrices.
+if (length(annotation_cols) > 0L && exists("win_mean")) {
+  long_rows <- lapply(annotation_cols, function(a) {
+    frac <- win_mean[[a]]
+    in_ann <- !is.na(frac) & frac > 0.5
+    if (sum(in_ann) < 5L) return(NULL)
+    data.frame(annotation = a,
+               i_total = win_mean$mean_i_total[in_ann])
+  })
+  long_df <- do.call(rbind, long_rows)
+  if (!is.null(long_df) && nrow(long_df) > 0L) {
+    print(ggplot(long_df, aes(x = annotation, y = i_total)) +
+      geom_violin(fill = "#bbbbbb", scale = "width", trim = FALSE) +
+      geom_boxplot(width = 0.1, outlier.size = 0.3, fill = "white") +
+      coord_flip() +
+      labs(x = NULL, y = expression("per-window mean " * i[total])) +
+      theme_ng(base_size = 8))
+  } else {
+    cat("Annotation summary empty after >50% cut.\n")
+  }
+} else {
+  cat("Skipping per-annotation violins.\n")
+}
 ```
 
 ```{r session}

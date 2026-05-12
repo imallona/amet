@@ -10,14 +10,25 @@ params:
   win_cell_feature: ""
   win_feature: ""
   win_bed: ""
+  windows_annotation: ""
   manifest: ""
   out_dir: ""
   log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
 
 ```{r logging_early, include = FALSE}
 source(Sys.getenv("AMET_RENDER_HELPERS"))
-amet_setup_render_logging(params$log_path)
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
+
+```{r load_window_annotation}
+window_annotation <- amet_load_annotation_matrix(params$windows_annotation)
+annotation_cols <- if (is.null(window_annotation)) character(0)
+  else setdiff(names(window_annotation),
+               c("chrom", "start", "end", "feature_id"))
+have_annotation <- length(annotation_cols) > 0L
 ```
 
 ```{r setup}
@@ -40,7 +51,7 @@ source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 source(file.path(repo_root, "workflow", "scripts", "driver_utils.R"))
 
 knitr::opts_chunk$set(
-  echo    = TRUE,
+  echo = TRUE,
   message = FALSE,
   warning = FALSE
 )
@@ -50,10 +61,10 @@ if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 ```
 
 ```{r load}
-cell_matrices  <- readRDS("argelaguet_cell_matrices.rds")
-ent            <- readRDS("argelaguet_entropy.rds")
-grp_meta       <- readRDS("argelaguet_groups_meta.rds")
-cell_umap_adjS <- readRDS("argelaguet_umap_cell_i_total.rds")
+cell_matrices <- readRDS("argelaguet_cell_matrices.rds")
+ent <- readRDS("argelaguet_entropy.rds")
+grp_meta <- readRDS("argelaguet_groups_meta.rds")
+cell_umap_i_total <- readRDS("argelaguet_umap_cell_i_total.rds")
 
 cell_df <- if (file.exists("argelaguet_embeddings_per_cell_summary.csv"))
   read.csv("argelaguet_embeddings_per_cell_summary.csv", stringsAsFactors = FALSE) else NULL
@@ -80,13 +91,13 @@ M) driver categorization across stages.
 ```{r fa-panel-a-v2}
 schema_classes <- c("Epiblast", "Mesoderm", "Endoderm", "ExE_ectoderm")
 schema_layout <- list(
-  Epiblast    = c("Epiblast", "Caudal_epiblast"),
-  Mesoderm    = c("Nascent_mesoderm", "Mature_mesoderm"),
-  Endoderm    = c("Embryonic_endoderm"),
+  Epiblast = c("Epiblast", "Caudal_epiblast"),
+  Mesoderm = c("Nascent_mesoderm", "Mature_mesoderm"),
+  Endoderm = c("Embryonic_endoderm"),
   ExE_ectoderm = c("ExE_ectoderm")
 )
 schema_classes <- intersect(schema_classes, names(argelaguet_lineage_class_pal))
-schema_layout  <- schema_layout[schema_classes]
+schema_layout <- schema_layout[schema_classes]
 schema_cells <- do.call(rbind, lapply(seq_along(schema_layout), function(i) {
   cls <- schema_classes[i]
   lns <- intersect(schema_layout[[i]], names(argelaguet_lineage_pal))
@@ -173,7 +184,7 @@ pA_v2 <- ggplot() +
 
 ```{r fa-panel-b-c-v2}
 mk_cell_umap <- function(color_col, pal, lab) {
-  ggplot(cell_umap_adjS,
+  ggplot(cell_umap_i_total,
          aes(x = UMAP1, y = UMAP2, color = .data[[color_col]])) +
     geom_point_rast(size = 0.2, alpha = 0.6, raster.dpi = 300) +
     scale_color_manual(values = pal, na.value = "grey80") +
@@ -181,19 +192,19 @@ mk_cell_umap <- function(color_col, pal, lab) {
                                 ncol = 2)) +
     labs(x = "UMAP 1", y = "UMAP 2", color = lab) +
     theme_ng(base_size = 7) +
-    theme(legend.position    = "bottom",
-          legend.key.size    = unit(1.0, "mm"),
-          legend.text        = element_text(size = 5),
-          legend.title       = element_text(size = 6),
-          legend.margin      = margin(0, 0, 0, 0),
-          legend.box.margin  = margin(2, 0, -2, 0),
+    theme(legend.position = "bottom",
+          legend.key.size = unit(1.0, "mm"),
+          legend.text = element_text(size = 5),
+          legend.title = element_text(size = 6),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(2, 0, -2, 0),
           legend.box.spacing = unit(1.5, "mm"),
-          axis.title.x       = element_text(margin = margin(t = 2, b = 0)),
-          plot.margin        = margin(0, 1, 0, 1, "mm"))
+          axis.title.x = element_text(margin = margin(t = 2, b = 0)),
+          plot.margin = margin(0, 1, 0, 1, "mm"))
 }
 
-pB_v2 <- mk_cell_umap("stage",   argelaguet_stage_pal,           "stage")
-pC_v2 <- mk_cell_umap("lineage", argelaguet_lineage_pal,         "lineage")
+pB_v2 <- mk_cell_umap("stage", argelaguet_stage_pal, "stage")
+pC_v2 <- mk_cell_umap("lineage", argelaguet_lineage_pal, "lineage")
 ```
 
 ```{r fa-panel-d-e-v2}
@@ -214,23 +225,23 @@ mk_meth_s_scatter <- function(color_col, pal, lab) {
     labs(x = "mean methylation", y = expression("mean " * i[total]),
          color = lab) +
     theme_ng(base_size = 7) +
-    theme(legend.position    = "bottom",
-          legend.key.size    = unit(1.0, "mm"),
-          legend.text        = element_text(size = 5),
-          legend.title       = element_text(size = 6),
-          legend.margin      = margin(0, 0, 0, 0),
-          legend.box.margin  = margin(2, 0, -2, 0),
+    theme(legend.position = "bottom",
+          legend.key.size = unit(1.0, "mm"),
+          legend.text = element_text(size = 5),
+          legend.title = element_text(size = 6),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(2, 0, -2, 0),
           legend.box.spacing = unit(1.5, "mm"),
-          axis.title.x       = element_text(margin = margin(t = 2, b = 0)),
-          plot.margin        = margin(0, 1, 0, 1, "mm"))
+          axis.title.x = element_text(margin = margin(t = 2, b = 0)),
+          plot.margin = margin(0, 1, 0, 1, "mm"))
 }
 
-pD_v2 <- mk_meth_s_scatter("stage",   argelaguet_stage_pal,   "stage")
+pD_v2 <- mk_meth_s_scatter("stage", argelaguet_stage_pal, "stage")
 pE_v2 <- mk_meth_s_scatter("lineage", argelaguet_lineage_pal, "lineage")
 ```
 
 ```{r fa-panel-f-v2}
-enh_prom <- cell_matrices$cells_adjS_wide %>%
+enh_prom <- cell_matrices$cells_i_total_wide %>%
   select(stage, enh = `Enh E7.5 union`, prom = Promoters) %>%
   filter(!is.na(enh), !is.na(prom))
 
@@ -243,14 +254,14 @@ pF_v2 <- ggplot(enh_prom, aes(x = prom, y = enh, color = stage)) +
        y = expression(i[total] * " enhancers"),
        color = "stage") +
   theme_ng(base_size = 7) +
-  theme(legend.position    = "bottom",
-        legend.key.size    = unit(1.0, "mm"),
-        legend.text        = element_text(size = 5),
-        legend.title       = element_text(size = 6),
-        legend.margin      = margin(0, 0, 0, 0),
-        legend.box.margin  = margin(-6, 0, -2, 0),
+  theme(legend.position = "bottom",
+        legend.key.size = unit(1.0, "mm"),
+        legend.text = element_text(size = 5),
+        legend.title = element_text(size = 6),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(-6, 0, -2, 0),
         legend.box.spacing = unit(0.2, "mm"),
-        plot.margin        = margin(0, 1, 0, 1, "mm"))
+        plot.margin = margin(0, 1, 0, 1, "mm"))
 ```
 
 ```{r fa-panel-g-v2}
@@ -266,13 +277,13 @@ if (!is.null(ve_long)) {
                                  "lineage" = "#E69F00")) +
     labs(x = "assay", y = "median % var. explained", fill = NULL) +
     theme_ng(base_size = 7) +
-    theme(legend.position      = c(0.02, 0.98),
+    theme(legend.position = c(0.02, 0.98),
           legend.justification = c(0, 1),
-          legend.background    = element_rect(fill = "white", colour = NA),
-          legend.key.size      = unit(1.8, "mm"),
-          legend.text          = element_text(size = 6),
-          legend.margin        = margin(0, 1, 0, 1),
-          plot.margin          = margin(0, 0, 0, 0, "mm"))
+          legend.background = element_rect(fill = "white", colour = NA),
+          legend.key.size = unit(1.8, "mm"),
+          legend.text = element_text(size = 6),
+          legend.margin = margin(0, 1, 0, 1),
+          plot.margin = margin(0, 0, 0, 0, "mm"))
 } else {
   pG_v2 <- patchwork::plot_spacer() +
     labs(title = "argelaguet_win_varexp.csv missing")
@@ -294,19 +305,19 @@ fam_lookup <- function(x) {
 fam_levels <- c("genes / promoters", "repeats", "ENCODE marks",
                 "E7.5 enhancers", "E7.5 H3K4me3", "ESC accessibility")
 
-tc_adjS <- ent$adjsampens %>%
+tc_i_total <- ent$i_total_long %>%
   group_by(stage, annotation) %>%
   summarise(
-    median_adjS = median(sampen, na.rm = TRUE),
-    lo = quantile(sampen, 0.25, na.rm = TRUE),
-    hi = quantile(sampen, 0.75, na.rm = TRUE),
+    median_i_total = median(i_total, na.rm = TRUE),
+    lo = quantile(i_total, 0.25, na.rm = TRUE),
+    hi = quantile(i_total, 0.75, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(family = factor(fam_lookup(as.character(annotation)), levels = fam_levels))
-write.csv(tc_adjS, "argelaguet_fig_i_total_by_stage_annotation.csv", row.names = FALSE)
+write.csv(tc_i_total, "argelaguet_fig_i_total_by_stage_annotation.csv", row.names = FALSE)
 
-pH_v2 <- ggplot(tc_adjS,
-                aes(x = stage, y = median_adjS,
+pH_v2 <- ggplot(tc_i_total,
+                aes(x = stage, y = median_i_total,
                     color = annotation, group = annotation)) +
   geom_ribbon(aes(ymin = lo, ymax = hi, fill = annotation),
               alpha = 0.15, color = NA) +
@@ -320,30 +331,30 @@ pH_v2 <- ggplot(tc_adjS,
        color = "annotation",
        caption = "shaded band: 25-75% quantile (IQR)") +
   theme_ng(base_size = 7) +
-  theme(axis.text.x        = element_text(angle = 45, hjust = 1, size = 5.5),
-        strip.text         = element_text(size = 6.5),
-        legend.position    = "right",
-        legend.key.size    = unit(1.5, "mm"),
-        legend.text        = element_text(size = 5.2),
-        legend.title       = element_text(size = 6),
-        plot.caption       = element_text(size = 5.5, hjust = 0, colour = "grey35"),
-        plot.margin        = margin(0, 0, 0, 0, "mm"))
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5.5),
+        strip.text = element_text(size = 6.5),
+        legend.position = "right",
+        legend.key.size = unit(1.5, "mm"),
+        legend.text = element_text(size = 5.2),
+        legend.title = element_text(size = 6),
+        plot.caption = element_text(size = 5.5, hjust = 0, colour = "grey35"),
+        plot.margin = margin(0, 0, 0, 0, "mm"))
 ```
 
 ```{r fa-panel-i-v2}
-tc_adjH <- ent$adjshannons %>%
+tc_jsd <- ent$jsd_long %>%
   group_by(stage, annotation) %>%
   summarise(
-    median_adjH = median(median_shannon, na.rm = TRUE),
-    lo = quantile(median_shannon, 0.25, na.rm = TRUE),
-    hi = quantile(median_shannon, 0.75, na.rm = TRUE),
+    median_group_jsd = median(median_jsd, na.rm = TRUE),
+    lo = quantile(median_jsd, 0.25, na.rm = TRUE),
+    hi = quantile(median_jsd, 0.75, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(family = factor(fam_lookup(as.character(annotation)), levels = fam_levels))
-write.csv(tc_adjH, "argelaguet_fig_jsd_by_stage_annotation.csv", row.names = FALSE)
+write.csv(tc_jsd, "argelaguet_fig_jsd_by_stage_annotation.csv", row.names = FALSE)
 
-pI_v2 <- ggplot(tc_adjH,
-                aes(x = stage, y = median_adjH,
+pI_v2 <- ggplot(tc_jsd,
+                aes(x = stage, y = median_group_jsd,
                     color = annotation, group = annotation)) +
   geom_ribbon(aes(ymin = lo, ymax = hi, fill = annotation),
               alpha = 0.15, color = NA) +
@@ -356,21 +367,21 @@ pI_v2 <- ggplot(tc_adjH,
   labs(x = "stage", y = "median jsd",
        caption = "shaded band: 25-75% quantile (IQR)") +
   theme_ng(base_size = 7) +
-  theme(axis.text.x  = element_text(angle = 45, hjust = 1, size = 5.5),
-        strip.text   = element_text(size = 6.5),
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5.5),
+        strip.text = element_text(size = 6.5),
         plot.caption = element_text(size = 5.5, hjust = 0, colour = "grey35"),
-        plot.margin  = margin(0, 0, 0, 0, "mm"))
+        plot.margin = margin(0, 0, 0, 0, "mm"))
 ```
 
 ```{r fa-panel-j-v2-data}
 heat_df <- grp_meta$all_grp_meta %>%
   group_by(lineage, annotation, lineage_class) %>%
-  summarise(median_adjS = median(median_adjS, na.rm = TRUE),
+  summarise(median_i_total = median(median_i_total, na.rm = TRUE),
             .groups = "drop") %>%
   filter(!is.na(lineage_class))
 
 wide <- heat_df %>%
-  pivot_wider(names_from = annotation, values_from = median_adjS)
+  pivot_wider(names_from = annotation, values_from = median_i_total)
 
 mat <- wide %>% select(-lineage, -lineage_class) %>% as.matrix()
 rownames(mat) <- wide$lineage
@@ -378,7 +389,7 @@ rownames(mat) <- wide$lineage
 ## Drop rows / columns that are entirely NA so hclust gets a finite distance.
 keep_rows <- rowSums(!is.na(mat)) >= 2
 keep_cols <- colSums(!is.na(mat)) >= 2
-mat  <- mat[keep_rows, keep_cols, drop = FALSE]
+mat <- mat[keep_rows, keep_cols, drop = FALSE]
 wide <- wide[keep_rows, , drop = FALSE]
 
 brk <- c(min(mat, na.rm = TRUE),
@@ -391,19 +402,19 @@ lc_pal <- argelaguet_lineage_class_pal[sort(unique(wide$lineage_class))]
 ```{r fa-panel-j-v2}
 ht_compact <- Heatmap(
   mat,
-  name              = "median\ni_total",
-  col               = col_fun_j,
-  row_split         = wide$lineage_class,
-  cluster_rows      = TRUE,
+  name = "median\ni_total",
+  col = col_fun_j,
+  row_split = wide$lineage_class,
+  cluster_rows = TRUE,
   cluster_row_slices = FALSE,
-  cluster_columns   = TRUE,
-  show_row_names    = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
   show_column_names = TRUE,
-  row_names_gp      = gpar(fontsize = 4.5),
-  column_names_gp   = gpar(fontsize = 5),
-  row_title         = NULL,
-  row_gap           = unit(0.8, "mm"),
-  right_annotation  = rowAnnotation(
+  row_names_gp = gpar(fontsize = 4.5),
+  column_names_gp = gpar(fontsize = 5),
+  row_title = NULL,
+  row_gap = unit(0.8, "mm"),
+  right_annotation = rowAnnotation(
     lineage_class = wide$lineage_class,
     col = list(lineage_class = lc_pal),
     simple_anno_size = unit(1.8, "mm"),
@@ -411,10 +422,10 @@ ht_compact <- Heatmap(
     show_legend = FALSE
   ),
   heatmap_legend_param = list(
-    title_gp    = gpar(fontsize = 6),
-    labels_gp   = gpar(fontsize = 5),
+    title_gp = gpar(fontsize = 6),
+    labels_gp = gpar(fontsize = 5),
     grid_height = unit(2, "mm"),
-    grid_width  = unit(2, "mm")
+    grid_width = unit(2, "mm")
   )
 )
 
@@ -422,9 +433,9 @@ pJ_v2 <- wrap_elements(full = grid::grid.grabExpr(draw(ht_compact)))
 ```
 
 ```{r fa-panel-k-v2}
-var_lin <- ent$adjsampens %>%
+var_lin <- ent$i_total_long %>%
   group_by(lineage) %>%
-  summarise(iqr = IQR(sampen, na.rm = TRUE), .groups = "drop") %>%
+  summarise(iqr = IQR(i_total, na.rm = TRUE), .groups = "drop") %>%
   arrange(desc(iqr)) %>%
   mutate(lineage = factor(lineage, levels = lineage))
 write.csv(var_lin, "argelaguet_fig_i_total_iqr_by_lineage.csv", row.names = FALSE)
@@ -440,23 +451,23 @@ pK_v2 <- ggplot(var_lin, aes(x = lineage, y = iqr)) +
 
 ```{r fa-panel-l-m-v2}
 driver_df_lin <- categorize_drivers(grp_meta$all_grp_meta, "lineage_class")
-driver_df_st  <- categorize_drivers(grp_meta$all_grp_meta, "stage")
+driver_df_st <- categorize_drivers(grp_meta$all_grp_meta, "stage")
 write.csv(driver_df_lin, "argelaguet_driver_sd_range_lineage.csv", row.names = FALSE)
-write.csv(driver_df_st,  "argelaguet_driver_sd_range_stage.csv",   row.names = FALSE)
+write.csv(driver_df_st, "argelaguet_driver_sd_range_stage.csv", row.names = FALSE)
 
 mk_driver_panel <- function(df, x_lab, y_lab) {
   p <- plot_driver_scatter(df, x_label = x_lab, y_label = y_lab) +
     guides(color = guide_legend(nrow = 1, title.position = "left"),
            shape = guide_legend(nrow = 1, title.position = "left")) +
     theme_ng(base_size = 7) +
-    theme(legend.position    = "bottom",
-          legend.key.size    = unit(1.0, "mm"),
-          legend.text        = element_text(size = 5),
-          legend.title       = element_text(size = 6),
-          legend.margin      = margin(0, 0, 0, 0),
-          legend.box.margin  = margin(-6, 0, -2, 0),
+    theme(legend.position = "bottom",
+          legend.key.size = unit(1.0, "mm"),
+          legend.text = element_text(size = 5),
+          legend.title = element_text(size = 6),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(-6, 0, -2, 0),
           legend.box.spacing = unit(0.2, "mm"),
-          plot.margin        = margin(0, 0, 0, 0, "mm"))
+          plot.margin = margin(0, 0, 0, 0, "mm"))
   repel_idx <- which(sapply(p$layers, function(l)
     inherits(l$geom, "GeomTextRepel")))
   if (length(repel_idx) > 0) p$layers[[repel_idx]] <- NULL
@@ -487,19 +498,19 @@ main_fig <- row1_v2 / row2_v2 / row3_v2 +
   plot_layout(heights = c(1.4, 1.0, 1.0)) +
   plot_annotation(tag_levels = "A",
                   theme = theme(
-                    plot.tag          = element_text(size = 9, face = "bold"),
+                    plot.tag = element_text(size = 9, face = "bold"),
                     plot.tag.position = c(0.01, 0.99),
-                    plot.margin       = margin(1, 1, 1, 1, "mm")
+                    plot.margin = margin(1, 1, 1, 1, "mm")
                   ))
 
 print(main_fig)
 
 ggsave(
   file.path(out_dir, "fig_argelaguet_main.pdf"),
-  plot   = main_fig,
-  width  = 8.27,
+  plot = main_fig,
+  width = 8.27,
   height = 8.0,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```
@@ -508,10 +519,10 @@ ggsave(
 # Supp single-panel: IQR i_total per lineage. Manuscript ref sfig:argelaguet_iqr_lineage.
 ggsave(
   file.path(out_dir, "fig_argelaguet_iqr_lineage.pdf"),
-  plot   = pK_v2,
-  width  = ng_fig_size(2, 1.2)$w,
+  plot = pK_v2,
+  width = ng_fig_size(2, 1.2)$w,
   height = ng_fig_size(2, 1.2)$h,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```
@@ -521,10 +532,10 @@ ggsave(
 # Manuscript ref sfig:argelaguet_drivers_lineage.
 ggsave(
   file.path(out_dir, "fig_argelaguet_drivers_lineage.pdf"),
-  plot   = pL_v2,
-  width  = ng_fig_size(2, 1.5)$w,
+  plot = pL_v2,
+  width = ng_fig_size(2, 1.5)$w,
   height = ng_fig_size(2, 1.5)$h,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```
@@ -534,10 +545,10 @@ ggsave(
 # Manuscript ref sfig:argelaguet_drivers_stage.
 ggsave(
   file.path(out_dir, "fig_argelaguet_drivers_stage.pdf"),
-  plot   = pM_v2,
-  width  = ng_fig_size(2, 1.5)$w,
+  plot = pM_v2,
+  width = ng_fig_size(2, 1.5)$w,
   height = ng_fig_size(2, 1.5)$h,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```
@@ -547,20 +558,20 @@ ggsave(
 ```{r fa-heatmap-standalone, fig.width = 9.0, fig.height = 6.4}
 ht_full <- Heatmap(
   mat,
-  name              = "median i_total",
-  col               = col_fun_j,
-  row_split         = wide$lineage_class,
-  cluster_rows      = TRUE,
+  name = "median i_total",
+  col = col_fun_j,
+  row_split = wide$lineage_class,
+  cluster_rows = TRUE,
   cluster_row_slices = FALSE,
-  cluster_columns   = FALSE,
-  show_row_names    = TRUE,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
   show_column_names = TRUE,
-  row_names_gp      = gpar(fontsize = 6),
-  column_names_gp   = gpar(fontsize = 7),
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 7),
   row_names_max_width = unit(4, "cm"),
-  row_title         = NULL,
-  row_gap           = unit(1.5, "mm"),
-  right_annotation  = rowAnnotation(
+  row_title = NULL,
+  row_gap = unit(1.5, "mm"),
+  right_annotation = rowAnnotation(
     lineage_class = wide$lineage_class,
     col = list(lineage_class = lc_pal),
     annotation_legend_param = list(lineage_class = list(title = "lineage class"))
@@ -574,18 +585,83 @@ draw(ht_full)
 invisible(dev.off())
 ```
 
+# Per-locus annotation panels
+
+## Supplementary view: per-window i_total summary by annotation, computed
+## directly from the windows long table and the per-window annotation matrix.
+
+```{r fa-supp-annotation-i-total-data}
+ann_iqr_df <- NULL
+if (have_annotation && file.exists(params$win_cell_feature)) {
+  library(data.table)
+  win_cf_fig <- fread(params$win_cell_feature)
+  win_mean_fig <- win_cf_fig[, .(mean_i_total = mean(i_total, na.rm = TRUE)),
+                             by = feature_id]
+  win_mean_fig <- merge(win_mean_fig,
+                        as.data.frame(window_annotation[, c("feature_id",
+                                                            annotation_cols),
+                                                        with = FALSE]),
+                        by = "feature_id", all.x = TRUE)
+  rows <- lapply(annotation_cols, function(a) {
+    frac <- win_mean_fig[[a]]
+    in_ann <- !is.na(frac) & frac > 0.5
+    if (sum(in_ann) < 10L) return(NULL)
+    data.frame(
+      annotation = a,
+      n_windows = sum(in_ann),
+      median_i_total = median(win_mean_fig$mean_i_total[in_ann],
+                              na.rm = TRUE),
+      lo = quantile(win_mean_fig$mean_i_total[in_ann], 0.25, na.rm = TRUE),
+      hi = quantile(win_mean_fig$mean_i_total[in_ann], 0.75, na.rm = TRUE)
+    )
+  })
+  ann_iqr_df <- do.call(rbind, rows)
+  if (!is.null(ann_iqr_df) && nrow(ann_iqr_df) > 0L) {
+    write.csv(ann_iqr_df,
+              "argelaguet_fig_windows_annotation_i_total.csv",
+              row.names = FALSE)
+  }
+}
+```
+
+```{r fa-supp-annotation-i-total-plot, fig.width = ng_fig_size(2, 1.4)$w, fig.height = ng_fig_size(2, 1.4)$h}
+if (!is.null(ann_iqr_df) && nrow(ann_iqr_df) > 0L) {
+  ann_iqr_df$annotation <- factor(ann_iqr_df$annotation,
+                                  levels = ann_iqr_df$annotation[
+                                    order(ann_iqr_df$median_i_total)])
+  p_ann <- ggplot(ann_iqr_df,
+                  aes(x = annotation, y = median_i_total)) +
+    geom_pointrange(aes(ymin = lo, ymax = hi), size = 0.25,
+                    fatten = 1.5) +
+    coord_flip() +
+    labs(x = NULL, y = expression("per-window mean " * i[total] *
+                                   " (median, IQR)"),
+         title = "Per-annotation windows i_total") +
+    theme_ng(base_size = 7) +
+    theme(axis.text.y = element_text(size = 5))
+  print(p_ann)
+  ggsave(file.path(out_dir, "fig_argelaguet_windows_annotation.pdf"),
+         plot = p_ann,
+         width = ng_fig_size(2, 1.4)$w,
+         height = ng_fig_size(2, 1.4)$h,
+         units = "in", device = cairo_pdf)
+} else {
+  cat("Skipping per-annotation windows panel: empty annotation summary.\n")
+}
+```
+
 # Legacy compact panels (kept for reference)
 
 ```{r fa-legacy-panels, fig.width = ng_fig_size(4, 2, panel_mm = 50)$w, fig.height = ng_fig_size(4, 2, panel_mm = 50)$h}
-pa <- ggplot(cell_umap_adjS, aes(x = UMAP1, y = UMAP2, color = stage)) +
+pa <- ggplot(cell_umap_i_total, aes(x = UMAP1, y = UMAP2, color = stage)) +
   geom_point_rast(size = 0.8, alpha = 0.7, raster.dpi = 300) +
   scale_color_manual(values = argelaguet_stage_pal) +
   guides(color = guide_legend(override.aes = list(size = 2, alpha = 1))) +
   labs(x = "UMAP 1", y = "UMAP 2", color = "stage") +
   theme_ng(base_size = 8)
 
-pb <- ggplot(tc_adjS,
-             aes(x = stage, y = median_adjS, color = annotation, group = annotation)) +
+pb <- ggplot(tc_i_total,
+             aes(x = stage, y = median_i_total, color = annotation, group = annotation)) +
   geom_line(linewidth = 0.5) +
   geom_ribbon(aes(ymin = lo, ymax = hi, fill = annotation),
               alpha = 0.1, color = NA) +
@@ -597,8 +673,8 @@ pb <- ggplot(tc_adjS,
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.key.size = unit(0.3, "cm"))
 
-pc <- ggplot(tc_adjH,
-             aes(x = stage, y = median_adjH, color = annotation, group = annotation)) +
+pc <- ggplot(tc_jsd,
+             aes(x = stage, y = median_group_jsd, color = annotation, group = annotation)) +
   geom_line(linewidth = 0.5) +
   geom_ribbon(aes(ymin = lo, ymax = hi, fill = annotation),
               alpha = 0.1, color = NA) +
@@ -630,21 +706,21 @@ pf <- plot_driver_scatter(driver_df_lin,
                           y_label = expression("SD of " * i[total] * " across lineage classes")) +
   theme_ng(base_size = 8) +
   theme(legend.key.size = unit(2, "mm"),
-        legend.text     = element_text(size = 6),
-        legend.title    = element_text(size = 7))
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 7))
 
 legend_theme <- theme(
-  legend.key.size   = unit(2, "mm"),
-  legend.text       = element_text(size = 5),
-  legend.title      = element_text(size = 6),
-  legend.position   = "right"
+  legend.key.size = unit(2, "mm"),
+  legend.text = element_text(size = 5),
+  legend.title = element_text(size = 6),
+  legend.position = "right"
 )
 pb_legacy <- pb +
   guides(color = guide_legend(ncol = 1, override.aes = list(linewidth = 1)),
-         fill  = guide_legend(ncol = 1)) + legend_theme
+         fill = guide_legend(ncol = 1)) + legend_theme
 pc_legacy <- pc +
   guides(color = guide_legend(ncol = 1, override.aes = list(linewidth = 1)),
-         fill  = guide_legend(ncol = 1)) + legend_theme
+         fill = guide_legend(ncol = 1)) + legend_theme
 pe_legacy <- pe + theme(axis.text.y = element_text(size = 6))
 
 gg_fig <- (pa | pb_legacy | pc_legacy) / (pd | pe_legacy | pf) +
@@ -656,10 +732,10 @@ print(gg_fig)
 
 ggsave(
   file.path(out_dir, "fig_argelaguet_panels.pdf"),
-  plot   = gg_fig,
-  width  = ng_fig_size(4, 2, panel_mm = 50)$w,
+  plot = gg_fig,
+  width = ng_fig_size(4, 2, panel_mm = 50)$w,
   height = ng_fig_size(4, 2, panel_mm = 50)$h,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```

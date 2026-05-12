@@ -8,7 +8,13 @@ output:
     code_folding: hide
 params:
   eval_dir: ""
+  log_path: ""
 ---
+
+```{r logging_early, include = FALSE}
+source(Sys.getenv("AMET_RENDER_HELPERS"))
+amet_setup_render_logging(params$log_path)
+```
 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
@@ -20,14 +26,16 @@ if (!nzchar(eval_dir)) {
     stop("params$eval_dir is required; pass via rmarkdown::render(params = list(eval_dir = ...))")
 }
 
+`%||%` <- function(a, b) if (!is.null(a) && length(a) > 0 && nzchar(a)) a else b
 show_plot <- function(name, caption = NULL) {
     img <- file.path(eval_dir, paste0(name, ".svg"))
     if (file.exists(img)) {
         cat(sprintf("![%s](%s)\n\n", caption %||% name, img))
     }
 }
-`%||%` <- function(a, b) if (!is.null(a) && length(a) > 0 && nzchar(a)) a else b
 ```
+
+> Note: `i_norm` here is the analytical normalization `i_total / (k_max * H(p_hat))` used as the headline within-cell score. It is NOT the same quantity as `i_total_resid` (regression residuals on `mean_meth`) used by the CRC SCE differential-entropy chain. See `TODO.md` for the reconciliation entry.
 
 # About this report
 

@@ -12,12 +12,15 @@ params:
   manifest: ""
   out_dir: ""
   de: ""
+  windows_annotation: ""
   log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
 
 ```{r logging_early, include = FALSE}
 source(Sys.getenv("AMET_RENDER_HELPERS"))
-amet_setup_render_logging(params$log_path)
+param <- amet_setup_render_logging(params$log_path, params$threads)
 ```
 
 ```{r setup}
@@ -38,7 +41,8 @@ source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 
 knitr::opts_chunk$set(
-  echo    = TRUE,
+  echo = TRUE,
+  error = TRUE,
   message = FALSE,
   warning = FALSE
 )
@@ -49,7 +53,7 @@ if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 ```
 
 ```{r load}
-ent    <- readRDS("crc_entropy_summaries.rds")
+ent <- readRDS("crc_entropy_summaries.rds")
 embeds <- readRDS("crc_embeddings_debug.rds")
 ```
 
@@ -57,7 +61,7 @@ embeds <- readRDS("crc_embeddings_debug.rds")
 
 Panels A-H assembled on one page:
 A) schematic of feature spaces and biological groupings;
-B) per-window UMAPs on i_total and adjS, coloured by location and patient;
+B) per-window UMAPs on i_total and i_total_resid, coloured by location and patient;
 C) per-variable median variance explained;
 D) median i_total per biopsy location and annotation (heatmap);
 E) per-cell entropy summaries by biopsy location;
@@ -143,7 +147,7 @@ pA <- ggplot() +
             fill = "grey40", color = NA) +
   annotate("text", x = 0, y = 1.3,
            label = sprintf("features (%d annotations)",
-                           length(unique(ent$adjsampens$annotation))),
+                           length(unique(ent$i_total_long$annotation))),
            hjust = 0, size = 2.4) +
   geom_rect(data = feat_blocks,
             aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
@@ -155,22 +159,27 @@ pA <- ggplot() +
 
 ```{r fc-panel-b}
 mk_umap_df <- function(em, metric) {
+  if (is.null(em) || is.null(em$umap)) {
+    return(data.frame(UMAP1 = numeric(), UMAP2 = numeric(),
+                      location = character(), patient = character(),
+                      metric = character(), stringsAsFactors = FALSE))
+  }
   cd <- embeds$col_data[em$kept_cols, ]
   data.frame(
-    UMAP1    = em$umap[, 1],
-    UMAP2    = em$umap[, 2],
+    UMAP1 = em$umap[, 1],
+    UMAP2 = em$umap[, 2],
     location = cd$location,
-    patient  = cd$patient,
-    metric   = metric,
+    patient = cd$patient,
+    metric = metric,
     stringsAsFactors = FALSE
   )
 }
 
 umap_df_B <- bind_rows(
   mk_umap_df(embeds$win_embeds$i_total, "i_total"),
-  mk_umap_df(embeds$win_embeds$adjS,    "adjS")
+  mk_umap_df(embeds$win_embeds$i_total_resid,    "i_total_resid")
 )
-umap_df_B$metric <- factor(umap_df_B$metric, levels = c("i_total", "adjS"))
+umap_df_B$metric <- factor(umap_df_B$metric, levels = c("i_total", "i_total_resid"))
 
 p_loc <- ggplot(umap_df_B, aes(UMAP1, UMAP2, color = location)) +
   geom_point_rast(size = 0.2, alpha = 0.5, raster.dpi = 300) +
@@ -180,13 +189,13 @@ p_loc <- ggplot(umap_df_B, aes(UMAP1, UMAP2, color = location)) +
                               nrow = 1)) +
   labs(x = "UMAP 1", y = "UMAP 2", color = "location") +
   theme_ng(base_size = 10) +
-  theme(legend.position   = "bottom",
-        legend.key.size   = unit(1.8, "mm"),
-        legend.text       = element_text(size = 7),
-        legend.title      = element_text(size = 8),
-        legend.margin     = margin(0, 0, 0, 0),
+  theme(legend.position = "bottom",
+        legend.key.size = unit(1.8, "mm"),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 8),
+        legend.margin = margin(0, 0, 0, 0),
         legend.box.margin = margin(-4, 0, 0, 0),
-        plot.margin       = margin(2, 2, 0, 2, "mm"))
+        plot.margin = margin(2, 2, 0, 2, "mm"))
 
 p_pat <- ggplot(umap_df_B, aes(UMAP1, UMAP2, color = patient)) +
   geom_point_rast(size = 0.2, alpha = 0.5, raster.dpi = 300) +
@@ -196,20 +205,20 @@ p_pat <- ggplot(umap_df_B, aes(UMAP1, UMAP2, color = patient)) +
                               nrow = 1)) +
   labs(x = "UMAP 1", y = "UMAP 2", color = "patient") +
   theme_ng(base_size = 10) +
-  theme(legend.position   = "bottom",
-        legend.key.size   = unit(1.8, "mm"),
-        legend.text       = element_text(size = 7),
-        legend.title      = element_text(size = 8),
-        legend.margin     = margin(0, 0, 0, 0),
+  theme(legend.position = "bottom",
+        legend.key.size = unit(1.8, "mm"),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 8),
+        legend.margin = margin(0, 0, 0, 0),
         legend.box.margin = margin(-4, 0, 0, 0),
-        plot.margin       = margin(0, 2, 2, 2, "mm"))
+        plot.margin = margin(0, 2, 2, 2, "mm"))
 
 pB <- wrap_elements(p_loc / p_pat)
 ```
 
 ```{r fc-panel-c}
 ve_win_long$assay <- factor(ve_win_long$assay,
-                            levels = c("i_total", "adjS", "methylation"))
+                            levels = c("i_total", "i_total_resid", "methylation"))
 
 pC <- ggplot(ve_win_long, aes(x = assay, y = median_ve, fill = variable)) +
   geom_col(position = position_dodge(width = 0.8)) +
@@ -221,17 +230,17 @@ pC <- ggplot(ve_win_long, aes(x = assay, y = median_ve, fill = variable)) +
 ```
 
 ```{r fc-panel-d}
-sample_df <- ent$adjsampens %>%
+sample_df <- ent$i_total_long %>%
   filter(!is.na(patient), !is.na(location), !is.na(annotation)) %>%
   mutate(sample = paste0(patient, "_", location)) %>%
   group_by(annotation, sample, patient, location) %>%
-  summarise(mean_adjS = mean(sampen, na.rm = TRUE), .groups = "drop")
+  summarise(mean_i_total = mean(i_total, na.rm = TRUE), .groups = "drop")
 
 write.csv(sample_df, "crc_fig_mean_i_total_by_sample.csv", row.names = FALSE)
 
 mat_sample <- sample_df %>%
-  select(annotation, sample, mean_adjS) %>%
-  pivot_wider(names_from = sample, values_from = mean_adjS) %>%
+  select(annotation, sample, mean_i_total) %>%
+  pivot_wider(names_from = sample, values_from = mean_i_total) %>%
   as.data.frame()
 rownames(mat_sample) <- mat_sample$annotation
 mat_sample$annotation <- NULL
@@ -241,26 +250,14 @@ col_meta_d <- sample_df %>%
   distinct(sample, patient, location)
 col_meta_d <- col_meta_d[match(colnames(mat_sample), col_meta_d$sample), ]
 
-col_fun_d <- colorRamp2(
-  quantile(mat_sample, c(0.05, 0.5, 0.95), na.rm = TRUE),
-  c("navy", "white", "firebrick")
-)
-
-ha_top <- HeatmapAnnotation(
-  patient  = col_meta_d$patient,
-  location = col_meta_d$location,
-  col = list(
-    patient  = crc_patient_pal[names(crc_patient_pal) %in% col_meta_d$patient],
-    location = crc_location_pal[names(crc_location_pal) %in% col_meta_d$location]
-  ),
-  annotation_name_gp = gpar(fontsize = 7),
-  annotation_legend_param = list(
-    patient  = list(title_gp = gpar(fontsize = 8),
-                    labels_gp = gpar(fontsize = 7)),
-    location = list(title_gp = gpar(fontsize = 8),
-                    labels_gp = gpar(fontsize = 7))
-  )
-)
+mat_finite <- mat_sample[is.finite(mat_sample)]
+if (length(unique(mat_finite)) >= 3) {
+  qd <- quantile(mat_finite, c(0.05, 0.5, 0.95))
+  if (length(unique(qd)) < 3) qd <- c(min(mat_finite), median(mat_finite), max(mat_finite))
+  col_fun_d <- colorRamp2(qd, c("navy", "white", "firebrick"))
+} else {
+  col_fun_d <- colorRamp2(c(0, 0.5, 1), c("navy", "white", "firebrick"))
+}
 
 annotation_category <- function(ann) {
   dplyr::case_when(
@@ -273,58 +270,84 @@ annotation_category <- function(ann) {
   )
 }
 
-row_cat <- factor(annotation_category(rownames(mat_sample)),
-                  levels = c("Segmentation", "Marks", "Domain",
-                             "Features", "SCNA"))
-
-ht_sample <- Heatmap(
-  mat_sample,
-  name            = "mean i_total",
-  col             = col_fun_d,
-  top_annotation  = ha_top,
-  row_split       = row_cat,
-  cluster_rows    = TRUE,
-  cluster_row_slices = FALSE,
-  cluster_columns = TRUE,
-  show_row_names    = TRUE,
-  show_column_names = TRUE,
-  row_names_gp    = gpar(fontsize = 7),
-  column_names_gp = gpar(fontsize = 6),
-  row_title_gp    = gpar(fontsize = 8, fontface = "bold"),
-  row_title_rot   = 0,
-  heatmap_legend_param = list(
-    title_gp  = gpar(fontsize = 8),
-    labels_gp = gpar(fontsize = 7)
+panel_d_ok <- nrow(mat_sample) > 0 && ncol(mat_sample) > 0
+if (panel_d_ok) {
+  ha_top <- HeatmapAnnotation(
+    patient = col_meta_d$patient,
+    location = col_meta_d$location,
+    col = list(
+      patient = crc_patient_pal[names(crc_patient_pal) %in% col_meta_d$patient],
+      location = crc_location_pal[names(crc_location_pal) %in% col_meta_d$location]
+    ),
+    annotation_name_gp = gpar(fontsize = 7),
+    annotation_legend_param = list(
+      patient = list(title_gp = gpar(fontsize = 8),
+                      labels_gp = gpar(fontsize = 7)),
+      location = list(title_gp = gpar(fontsize = 8),
+                      labels_gp = gpar(fontsize = 7))
+    )
   )
-)
 
-pD <- wrap_elements(full = grid::grid.grabExpr(draw(ht_sample,
-                                                    merge_legend = TRUE)))
+  row_cat <- factor(annotation_category(rownames(mat_sample)),
+                    levels = c("Segmentation", "Marks", "Domain",
+                               "Features", "SCNA"))
+
+  ht_sample <- Heatmap(
+    mat_sample,
+    name = "mean i_total",
+    col = col_fun_d,
+    top_annotation = ha_top,
+    row_split = row_cat,
+    cluster_rows = TRUE,
+    cluster_row_slices = FALSE,
+    cluster_columns = TRUE,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    row_names_gp = gpar(fontsize = 7),
+    column_names_gp = gpar(fontsize = 6),
+    row_title_gp = gpar(fontsize = 8, fontface = "bold"),
+    row_title_rot = 0,
+    heatmap_legend_param = list(
+      title_gp = gpar(fontsize = 8),
+      labels_gp = gpar(fontsize = 7)
+    )
+  )
+
+  pD <- wrap_elements(full = grid::grid.grabExpr(draw(ht_sample,
+                                                      merge_legend = TRUE)))
+} else {
+  pD <- ggplot() +
+    annotate("text", x = 0.5, y = 0.5, label = "sample-level heatmap unavailable", size = 2.8) +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) + theme_void()
+}
 ```
 
 ```{r fc-panel-e}
-pE <- ggplot(cell_df_all, aes(x = mean_meth, y = mean_adjS, color = location)) +
+pE <- ggplot(cell_df_all, aes(x = mean_meth, y = mean_i_total_resid, color = location)) +
   geom_point(size = 0.5, alpha = 0.6) +
   geom_smooth(aes(group = location), method = "lm", se = FALSE,
               linewidth = 0.5) +
   scale_color_manual(values = crc_location_pal) +
   facet_wrap(~ patient, nrow = 1) +
-  labs(x = "cell mean methylation", y = "cell mean adjS") +
+  labs(x = "cell mean methylation", y = "cell mean i_total_resid") +
   guides(x = guide_x_nolap(),
          color = guide_legend(override.aes = list(size = 2.5, alpha = 1))) +
   theme_ng(base_size = 10) +
   theme(legend.key.size = unit(2, "mm"),
-        legend.text     = element_text(size = 8),
-        legend.title    = element_text(size = 9))
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 9))
 ```
 
 ```{r fc-panel-f}
-de_nc <- de[c("pt_vs_nc", "ln_vs_nc", "ml_vs_nc", "mp_vs_nc")]
+de_nc <- de[intersect(c("pt_vs_nc", "ln_vs_nc", "ml_vs_nc", "mp_vs_nc"), names(de))]
 
 summarize_contrast <- function(df, alpha = 0.05) {
-  sig <- df[df$adj_p < alpha, ]
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(upregulated = 0L, downregulated = 0L))
+  }
+  sig <- df[!is.na(df$adj_p) & df$adj_p < alpha, ]
   data.frame(
-    upregulated   = sum(sig$moderated_t >= 0, na.rm = TRUE),
+    upregulated = sum(sig$moderated_t >= 0, na.rm = TRUE),
     downregulated = sum(sig$moderated_t < 0,  na.rm = TRUE)
   )
 }
@@ -347,50 +370,133 @@ pF <- ggplot(df_long_de, aes(x = contrast, y = count + 1, fill = direction)) +
             position = position_dodge(width = 0.8),
             vjust = -0.3, size = 2.2) +
   scale_y_log10() +
-  scale_fill_manual(values = c(upregulated   = "#1b9e77",
+  scale_fill_manual(values = c(upregulated = "#1b9e77",
                                downregulated = "#d95f02")) +
   labs(x = "contrast (vs NC)", y = "windows (log scale)", fill = NULL) +
   theme_ng(base_size = 9) +
-  theme(legend.position   = "top",
-        legend.key.size   = unit(2.5, "mm"),
-        legend.text       = element_text(size = 7),
-        legend.margin     = margin(0, 0, 0, 0),
+  theme(legend.position = "top",
+        legend.key.size = unit(2.5, "mm"),
+        legend.text = element_text(size = 7),
+        legend.margin = margin(0, 0, 0, 0),
         legend.box.margin = margin(0, 0, -2, 0))
 ```
 
 ```{r fc-panel-g}
-## amet's window BED has no per-window genomic-feature columns, so the
-## panel G annotation-overlap dotplot cannot be built. Render an empty
-## placeholder panel keyed off prop_df = NULL so the assembled figure
-## layout below still works.
-prop_df <- data.frame(annotation = character(), contrast_dir = character(),
-                      proportion = numeric())
+rd <- embeds$row_data
+all_regions <- rownames(rd)
+
+ann_pretty <- c(
+  "pmds_pmd"                  = "PMDs",
+  "hmds_pmd"                  = "HMDs",
+  "H3K27me3_chip"             = "H3K27me3",
+  "H3K9me3_chip"              = "H3K9me3",
+  "H3K4me3_chip"              = "H3K4me3",
+  "laminb1_lad"               = "Lamin B1",
+  "genes_genes"               = "Genes",
+  "cpgIslandExt_cpgIslandExt" = "CpGi",
+  "crc01_gain_scna_scna"      = "SCNA gain",
+  "crc01_lost_scna_scna"      = "SCNA loss"
+)
+annot_features <- paste0(names(ann_pretty), "_bin")
+available_annot <- intersect(annot_features, colnames(rd))
+
+if (length(available_annot) > 0 && nrow(rd) > 0) {
+  prop_df <- bind_rows(lapply(names(de_nc), function(nm) {
+    cf <- de_nc[[nm]]$coefs_df
+    if (is.null(cf) || nrow(cf) == 0) return(NULL)
+    up <- cf$region[!is.na(cf$adj_p) & cf$adj_p < 0.05 & cf$moderated_t >= 0]
+    down <- cf$region[!is.na(cf$adj_p) & cf$adj_p < 0.05 & cf$moderated_t < 0]
+    is_up <- all_regions %in% up
+    is_down <- all_regions %in% down
+    bind_rows(lapply(available_annot, function(ann) {
+      ann_vec <- rd[[ann]]
+      data.frame(
+        annotation = gsub("_bin$", "", ann),
+        contrast = nm,
+        direction = c("up", "down"),
+        proportion = c(
+          if (sum(is_up) > 0) sum(ann_vec[is_up] == 1, na.rm = TRUE) / sum(is_up) else NA_real_,
+          if (sum(is_down) > 0) sum(ann_vec[is_down] == 1, na.rm = TRUE) / sum(is_down) else NA_real_
+        ),
+        stringsAsFactors = FALSE
+      )
+    }))
+  })) %>%
+    filter(!is.na(proportion)) %>%
+    mutate(contrast_dir = paste0(contrast_short(contrast), " (", direction, ")"),
+           annotation = factor(annotation,
+                               levels = intersect(names(ann_pretty),
+                                                  gsub("_bin$", "", available_annot)),
+                               labels = unname(ann_pretty[intersect(
+                                 names(ann_pretty),
+                                 gsub("_bin$", "", available_annot))])))
+} else {
+  prop_df <- data.frame(annotation = character(), contrast_dir = character(),
+                        proportion = numeric())
+}
 write.csv(prop_df, "crc_de_annotation_overlap.csv", row.names = FALSE)
 
-pG <- ggplot() +
-  annotate("text", x = 0.5, y = 0.5,
-           label = "annotation overlap\nnot available\n(amet windows BED has no\nper-window annotations)",
-           size = 2.5) +
-  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
-  theme_void() +
-  theme(plot.margin = margin(2, 2, 2, 2, "mm"))
+if (nrow(prop_df) > 0) {
+  pG <- ggplot(prop_df, aes(x = contrast_dir, y = annotation)) +
+    geom_point(aes(size = proportion, color = proportion)) +
+    scale_size(range = c(0.8, 5)) +
+    scale_color_gradient(low = "grey80", high = "red") +
+    guides(size = guide_legend(direction = "horizontal",
+                               title.position = "top", nrow = 1),
+           color = guide_colorbar(direction = "horizontal",
+                                  title.position = "top",
+                                  barheight = unit(2, "mm"),
+                                  barwidth = unit(28, "mm"))) +
+    labs(x = "contrast (vs NC)", y = "annotation",
+         size = "proportion", color = "proportion") +
+    theme_ng(base_size = 9) +
+    theme(legend.position = "bottom",
+          legend.box = "horizontal",
+          legend.key.size = unit(2.8, "mm"),
+          legend.text = element_text(size = 8),
+          legend.title = element_text(size = 9),
+          legend.spacing.x = unit(2, "mm"),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(-2, 0, 0, 0))
+} else {
+  pG <- ggplot() +
+    annotate("text", x = 0.5, y = 0.5,
+             label = "annotation overlap unavailable",
+             size = 2.5) +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+    theme_void() +
+    theme(plot.margin = margin(2, 2, 2, 2, "mm"))
+}
 ```
 
 ```{r fc-panel-h}
 write.csv(driver_df, "crc_driver_sd_range.csv", row.names = FALSE)
 
-pH <- plot_driver_scatter(driver_df,
-                          x_label = "SD of jsd across biopsy locations",
-                          y_label = expression("SD of " * i[total] * " across biopsy locations")) +
-  guides(color = guide_legend(nrow = 2, byrow = TRUE,
-                              title.position = "top")) +
-  theme_ng(base_size = 9) +
-  theme(legend.position   = "bottom",
-        legend.key.size   = unit(2.5, "mm"),
-        legend.text       = element_text(size = 7),
-        legend.title      = element_text(size = 8),
-        legend.margin     = margin(0, 0, 0, 0),
-        legend.box.margin = margin(-2, 0, 0, 0))
+driver_ok <- nrow(driver_df) > 0 &&
+  any(is.finite(driver_df$jsd_sd)) &&
+  any(is.finite(driver_df$i_total_sd))
+
+if (driver_ok) {
+  pH <- plot_driver_scatter(driver_df,
+                            x_label = "SD of jsd across biopsy locations",
+                            y_label = expression("SD of " * i[total] * " across biopsy locations")) +
+    guides(color = guide_legend(nrow = 2, byrow = TRUE,
+                                title.position = "top")) +
+    theme_ng(base_size = 9) +
+    theme(legend.position = "bottom",
+          legend.key.size = unit(2.5, "mm"),
+          legend.text = element_text(size = 7),
+          legend.title = element_text(size = 8),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(-2, 0, 0, 0))
+} else {
+  pH <- ggplot() +
+    annotate("text", x = 0.5, y = 0.5,
+             label = "driver scatter unavailable\n(no finite SDs)",
+             size = 2.5) +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+    theme_void()
+}
 ```
 
 # Half-A4 compact figure (primary)
@@ -401,13 +507,15 @@ width of F and H).
 
 ```{r fc-panel-a-v2}
 schema_patients <- intersect(names(crc_patient_pal),
-                             unique(embeds$col_data$patient))[1:4]
-schema_biopsies <- list(
+                             unique(embeds$col_data$patient))
+schema_patients <- head(schema_patients[!is.na(schema_patients)], 4)
+schema_biopsies_pool <- list(
   c("NC", "PT"),
   c("NC", "PT", "LN"),
   c("PT", "ML"),
   c("NC", "PT", "MP")
 )
+schema_biopsies <- schema_biopsies_pool[seq_along(schema_patients)]
 schema_cells <- do.call(rbind, Map(function(pat, locs) {
   data.frame(patient = pat, location = locs, stringsAsFactors = FALSE)
 }, schema_patients, schema_biopsies))
@@ -510,18 +618,18 @@ mk_compact_umap <- function(df, color_col, pal, title_lab) {
                                 nrow = 1)) +
     labs(x = "UMAP 1", y = "UMAP 2", color = title_lab) +
     theme_ng(base_size = 7) +
-    theme(legend.position     = "bottom",
-          legend.key.size     = unit(1.2, "mm"),
-          legend.text         = element_text(size = 5.5),
-          legend.title        = element_text(size = 6.5),
-          legend.margin       = margin(0, 0, 0, 0),
-          legend.box.margin   = margin(-9, 0, -3, 0),
-          legend.box.spacing  = unit(0.2, "mm"),
-          legend.spacing.y    = unit(0, "mm"),
-          strip.text          = element_text(size = 6.5,
+    theme(legend.position = "bottom",
+          legend.key.size = unit(1.2, "mm"),
+          legend.text = element_text(size = 5.5),
+          legend.title = element_text(size = 6.5),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(-9, 0, -3, 0),
+          legend.box.spacing = unit(0.2, "mm"),
+          legend.spacing.y = unit(0, "mm"),
+          strip.text = element_text(size = 6.5,
                                              margin = margin(1, 0, 1, 0)),
-          panel.spacing       = unit(0.4, "mm"),
-          plot.margin         = margin(0, 0, 0, 0, "mm"))
+          panel.spacing = unit(0.4, "mm"),
+          plot.margin = margin(0, 0, 0, 0, "mm"))
 }
 
 p_loc_v2 <- mk_compact_umap(umap_df_B, "location",
@@ -539,77 +647,81 @@ pC_v2 <- ggplot(ve_win_long, aes(x = assay, y = median_ve, fill = variable)) +
   scale_fill_manual(values = c("location" = "#0072B2", "patient" = "#E69F00")) +
   labs(x = "assay", y = "median % var. explained", fill = NULL) +
   theme_ng(base_size = 7) +
-  theme(legend.key.size    = unit(1.5, "mm"),
-        legend.position    = "top",
-        legend.text        = element_text(size = 6),
-        legend.margin      = margin(0, 0, 0, 0),
-        legend.box.margin  = margin(0, 0, -4, 0),
+  theme(legend.key.size = unit(1.5, "mm"),
+        legend.position = "top",
+        legend.text = element_text(size = 6),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(0, 0, -4, 0),
         legend.box.spacing = unit(0.5, "mm"),
-        plot.margin        = margin(0, 0, 0, 0, "mm"))
+        plot.margin = margin(0, 0, 0, 0, "mm"))
 ```
 
 ```{r fc-panel-d-v2}
-ht_sample_v2 <- Heatmap(
-  mat_sample,
-  name            = "mean i_total",
-  col             = col_fun_d,
-  top_annotation  = HeatmapAnnotation(
-    patient  = col_meta_d$patient,
-    location = col_meta_d$location,
-    col = list(
-      patient  = crc_patient_pal[names(crc_patient_pal) %in% col_meta_d$patient],
-      location = crc_location_pal[names(crc_location_pal) %in% col_meta_d$location]
+if (panel_d_ok) {
+  ht_sample_v2 <- Heatmap(
+    mat_sample,
+    name = "mean i_total",
+    col = col_fun_d,
+    top_annotation = HeatmapAnnotation(
+      patient = col_meta_d$patient,
+      location = col_meta_d$location,
+      col = list(
+        patient = crc_patient_pal[names(crc_patient_pal) %in% col_meta_d$patient],
+        location = crc_location_pal[names(crc_location_pal) %in% col_meta_d$location]
+      ),
+      simple_anno_size = unit(2, "mm"),
+      annotation_name_gp = gpar(fontsize = 5),
+      show_legend = FALSE
     ),
-    simple_anno_size = unit(2, "mm"),
-    annotation_name_gp = gpar(fontsize = 5),
-    show_legend = FALSE
-  ),
-  row_split       = row_cat,
-  cluster_rows    = TRUE,
-  cluster_row_slices = FALSE,
-  cluster_columns = TRUE,
-  show_row_names    = TRUE,
-  show_column_names = TRUE,
-  row_names_gp    = gpar(fontsize = 4.5),
-  column_names_gp = gpar(fontsize = 4.5),
-  row_title_gp    = gpar(fontsize = 6, fontface = "bold"),
-  row_title_rot   = 0,
-  row_gap         = unit(0.8, "mm"),
-  heatmap_legend_param = list(
-    title_gp    = gpar(fontsize = 6),
-    labels_gp   = gpar(fontsize = 5),
-    grid_height = unit(2, "mm"),
-    grid_width  = unit(2, "mm")
+    row_split = row_cat,
+    cluster_rows = TRUE,
+    cluster_row_slices = FALSE,
+    cluster_columns = TRUE,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    row_names_gp = gpar(fontsize = 4.5),
+    column_names_gp = gpar(fontsize = 4.5),
+    row_title_gp = gpar(fontsize = 6, fontface = "bold"),
+    row_title_rot = 0,
+    row_gap = unit(0.8, "mm"),
+    heatmap_legend_param = list(
+      title_gp = gpar(fontsize = 6),
+      labels_gp = gpar(fontsize = 5),
+      grid_height = unit(2, "mm"),
+      grid_width = unit(2, "mm")
+    )
   )
-)
 
-pD_v2 <- wrap_elements(full = grid::grid.grabExpr(draw(ht_sample_v2,
-                                                       merge_legend = TRUE)))
+  pD_v2 <- wrap_elements(full = grid::grid.grabExpr(draw(ht_sample_v2,
+                                                         merge_legend = TRUE)))
+} else {
+  pD_v2 <- pD
+}
 ```
 
 ```{r fc-panel-e-v2}
-pE_v2 <- ggplot(cell_df_all, aes(x = mean_meth, y = mean_adjS, color = location)) +
+pE_v2 <- ggplot(cell_df_all, aes(x = mean_meth, y = mean_i_total_resid, color = location)) +
   geom_point(size = 0.25, alpha = 0.6) +
   geom_smooth(aes(group = location), method = "lm", se = FALSE,
               linewidth = 0.35) +
   scale_color_manual(values = crc_location_pal) +
   facet_wrap(~ patient, nrow = 2) +
-  labs(x = "cell mean methylation", y = "cell mean adjS") +
+  labs(x = "cell mean methylation", y = "cell mean i_total_resid") +
   guides(x = guide_x_nolap(),
          color = guide_legend(override.aes = list(size = 1.5, alpha = 1),
                               nrow = 1)) +
   theme_ng(base_size = 7) +
-  theme(legend.position    = "bottom",
-        legend.key.size    = unit(1.2, "mm"),
-        legend.text        = element_text(size = 6),
-        legend.title       = element_text(size = 7),
-        legend.margin      = margin(0, 0, 0, 0),
-        legend.box.margin  = margin(-6, 0, -2, 0),
+  theme(legend.position = "bottom",
+        legend.key.size = unit(1.2, "mm"),
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 7),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(-6, 0, -2, 0),
         legend.box.spacing = unit(0.5, "mm"),
-        strip.text         = element_text(size = 6,
+        strip.text = element_text(size = 6,
                                           margin = margin(1, 0, 1, 0)),
-        panel.spacing      = unit(0.8, "mm"),
-        plot.margin        = margin(0, 0, 0, 0, "mm"))
+        panel.spacing = unit(0.8, "mm"),
+        plot.margin = margin(0, 0, 0, 0, "mm"))
 ```
 
 ```{r fc-panel-f-v2}
@@ -619,17 +731,17 @@ pF_v2 <- ggplot(df_long_de, aes(x = contrast, y = count + 1, fill = direction)) 
             position = position_dodge(width = 0.8),
             vjust = -0.3, size = 1.8) +
   scale_y_log10() +
-  scale_fill_manual(values = c(upregulated   = "#1b9e77",
+  scale_fill_manual(values = c(upregulated = "#1b9e77",
                                downregulated = "#d95f02")) +
   labs(x = "contrast (vs NC)", y = "windows (log)", fill = NULL) +
   theme_ng(base_size = 7) +
-  theme(legend.position    = "top",
-        legend.key.size    = unit(1.5, "mm"),
-        legend.text        = element_text(size = 5.5),
-        legend.margin      = margin(0, 0, 0, 0),
-        legend.box.margin  = margin(0, 0, -4, 0),
+  theme(legend.position = "top",
+        legend.key.size = unit(1.5, "mm"),
+        legend.text = element_text(size = 5.5),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(0, 0, -4, 0),
         legend.box.spacing = unit(0.5, "mm"),
-        plot.margin        = margin(0, 0, 0, 0, "mm"))
+        plot.margin = margin(0, 0, 0, 0, "mm"))
 ```
 
 ```{r fc-panel-g-v2}
@@ -637,29 +749,33 @@ pG_v2 <- pG
 ```
 
 ```{r fc-panel-h-v2}
-pH_v2 <- plot_driver_scatter(driver_df,
-                             x_label = "SD jsd (locations)",
-                             y_label = expression("SD " * i[total] * " (locations)")) +
-  guides(color = guide_legend(nrow = 1, title.position = "left"),
-         shape = guide_legend(nrow = 1, title.position = "left")) +
-  theme_ng(base_size = 7) +
-  theme(legend.position    = "bottom",
-        legend.key.size    = unit(1.2, "mm"),
-        legend.text        = element_text(size = 5.5),
-        legend.title       = element_text(size = 6.5),
-        legend.margin      = margin(0, 0, 0, 0),
-        legend.box.margin  = margin(-6, 0, -2, 0),
-        legend.box.spacing = unit(0.5, "mm"),
-        plot.margin        = margin(0, 0, 0, 0, "mm"))
+if (driver_ok) {
+  pH_v2 <- plot_driver_scatter(driver_df,
+                               x_label = "SD jsd (locations)",
+                               y_label = expression("SD " * i[total] * " (locations)")) +
+    guides(color = guide_legend(nrow = 1, title.position = "left"),
+           shape = guide_legend(nrow = 1, title.position = "left")) +
+    theme_ng(base_size = 7) +
+    theme(legend.position = "bottom",
+          legend.key.size = unit(1.2, "mm"),
+          legend.text = element_text(size = 5.5),
+          legend.title = element_text(size = 6.5),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(-6, 0, -2, 0),
+          legend.box.spacing = unit(0.5, "mm"),
+          plot.margin = margin(0, 0, 0, 0, "mm"))
 
-repel_idx <- which(sapply(pH_v2$layers, function(l)
-  inherits(l$geom, "GeomTextRepel")))
-if (length(repel_idx) > 0) pH_v2$layers[[repel_idx]] <- NULL
-pH_v2 <- pH_v2 +
-  ggrepel::geom_text_repel(size = 1.6, max.overlaps = Inf,
-                           min.segment.length = 0,
-                           segment.size = 0.2, box.padding = 0.25,
-                           force = 3)
+  repel_idx <- which(sapply(pH_v2$layers, function(l)
+    inherits(l$geom, "GeomTextRepel")))
+  if (length(repel_idx) > 0) pH_v2$layers[[repel_idx]] <- NULL
+  pH_v2 <- pH_v2 +
+    ggrepel::geom_text_repel(size = 1.6, max.overlaps = Inf,
+                             min.segment.length = 0,
+                             segment.size = 0.2, box.padding = 0.25,
+                             force = 3)
+} else {
+  pH_v2 <- pH
+}
 ```
 
 ```{r single-page-combined-v2, fig.width = 8.27, fig.height = 8.5}
@@ -671,19 +787,19 @@ compact_fig <- row1_v2 / row2_v2 / row3_v2 +
   plot_layout(heights = c(2.3, 1.4, 1)) +
   plot_annotation(tag_levels = "A",
                   theme = theme(
-                    plot.tag          = element_text(size = 9, face = "bold"),
+                    plot.tag = element_text(size = 9, face = "bold"),
                     plot.tag.position = c(0.01, 0.99),
-                    plot.margin       = margin(1, 1, 1, 1, "mm")
+                    plot.margin = margin(1, 1, 1, 1, "mm")
                   ))
 
 print(compact_fig)
 
 ggsave(
   file.path(out_dir, "fig_crc_half_a4.pdf"),
-  plot   = compact_fig,
-  width  = 8.27,
+  plot = compact_fig,
+  width = 8.27,
   height = 8.5,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```
@@ -701,7 +817,7 @@ EEEEEE
 "
 
 single_page_fig <- pA + pB + pC + pD + pE + pF + pG + pH +
-  plot_layout(design  = design,
+  plot_layout(design = design,
               heights = c(3.5, 3.5, 3.0, 2.0, 3.0, 3.0)) +
   plot_annotation(tag_levels = "A",
                   theme = theme(plot.tag = element_text(size = 10,
@@ -711,10 +827,10 @@ print(single_page_fig)
 
 ggsave(
   file.path(out_dir, "fig_crc_single_page.pdf"),
-  plot   = single_page_fig,
-  width  = 8.27,
+  plot = single_page_fig,
+  width = 8.27,
   height = 18.5,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```

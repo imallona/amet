@@ -275,6 +275,59 @@ rule ecker_stage_annotation_bed:
         """
 
 
+rule ecker_window_annotation_per_annotation:
+    """Fraction of each window covered by one annotation's intervals.
+    Produces a single-column file with header == {annotation} so columns
+    can be paste-merged downstream."""
+    wildcard_constraints:
+        annotation = "|".join(_ECKER_ALL_ANN_NAMES),
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    input:
+        windows = op.join(ECKER_RUN, "beds", "windows.bed"),
+        annotation = op.join(ECKER_RUN, "beds", "{annotation}.bed"),
+    output:
+        frac = temp(op.join(ECKER_RUN, "beds",
+                            "windows_annotation_{annotation}.frac")),
+    log:
+        op.join(ECKER_RUN, "logs", "window_annotation_{annotation}.log"),
+    shell:
+        r"""
+        mkdir -p $(dirname {output.frac})
+        echo "{wildcards.annotation}" > {output.frac}
+        bedtools coverage -a {input.windows} -b {input.annotation} \
+          | cut -f7 >> {output.frac} 2> {log}
+        """
+
+
+rule ecker_combine_window_annotations:
+    """Paste the windows BED (chrom/start/end/feature_id) with per-annotation
+    fraction columns. Output is a gzipped TSV with one row per window plus a
+    single header row."""
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    input:
+        windows = op.join(ECKER_RUN, "beds", "windows.bed"),
+        fracs = expand(
+            op.join(ECKER_RUN, "beds",
+                    "windows_annotation_{annotation}.frac"),
+            annotation = _ECKER_ALL_ANN_NAMES),
+    output:
+        tsv = op.join(ECKER_RUN, "beds", "windows_annotation.tsv.gz"),
+    log:
+        op.join(ECKER_RUN, "logs", "combine_window_annotations.log"),
+    shell:
+        r"""
+        mkdir -p $(dirname {output.tsv})
+        tmp=$(mktemp)
+        echo -e "chrom\tstart\tend\tfeature_id" > "$tmp"
+        cat "$tmp" {input.windows} \
+          | paste - {input.fracs} \
+          | gzip -c > {output.tsv} 2> {log}
+        rm -f "$tmp"
+        """
+
+
 def _ecker_all_cell_tsvs(wildcards):
     """All per-cell tsv.gz paths from the manifest checkpoint."""
     import csv
@@ -442,8 +495,13 @@ def list_ecker_features_outputs(wildcards):
     return out
 
 
-def _ecker_render_shell():
+def _ecker_render_shell(with_windows_annotation = False):
     helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R")
+    i_max_lag = config["amet"]["i_max_lag"]
+    ann_line = (
+        '                windows_annotation="{input.windows_annotation}",\n'
+        if with_windows_annotation else ""
+    )
     return rf"""
         mkdir -p {{params.out_dir}}
         export AMET_RENDER_HELPERS="{helpers}"
@@ -456,9 +514,11 @@ def _ecker_render_shell():
                 win_cell_feature="{{input.win_cell_feature}}",
                 win_feature="{{input.win_feature}}",
                 win_bed="{{input.win_bed}}",
-                manifest="{{input.manifest}}",
+{ann_line}                manifest="{{input.manifest}}",
                 out_dir="{{params.out_dir}}",
-                log_path="{{log}}"),
+                log_path="{{log}}",
+                threads={{threads}},
+                i_max_lag={i_max_lag}),
             quiet=TRUE)' &> {{log}}
         """
 
@@ -473,6 +533,7 @@ rule render_ecker:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [EMBEDDING_UTILS_R, DRIVER_UTILS_R],
         features = list_ecker_features_outputs,
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
@@ -492,6 +553,7 @@ rule render_ecker:
         features_dir = op.join(ECKER_RUN, "features"),
     log:
         op.join(ECKER_RUN, "logs", "render_ecker.log"),
+    threads: 4
     shell:
         _ecker_render_shell()
 
@@ -501,9 +563,11 @@ rule render_ecker_windows:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker_windows.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS,
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(ECKER_RUN, "beds", "windows_annotation.tsv.gz"),
         manifest = op.join(ECKER_DATA, "cells.tsv"),
     output:
         html = op.join(ECKER_RUN, "ecker_windows.html"),
@@ -514,8 +578,9 @@ rule render_ecker_windows:
         features_dir = op.join(ECKER_RUN, "features"),
     log:
         op.join(ECKER_RUN, "logs", "render_ecker_windows.log"),
+    threads: 4
     shell:
-        _ecker_render_shell()
+        _ecker_render_shell(with_windows_annotation = True)
 
 
 rule render_ecker_embeddings:
@@ -523,9 +588,11 @@ rule render_ecker_embeddings:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker_embeddings.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [EMBEDDING_UTILS_R],
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(ECKER_RUN, "beds", "windows_annotation.tsv.gz"),
         manifest = op.join(ECKER_DATA, "cells.tsv"),
     output:
         html = op.join(ECKER_RUN, "ecker_embeddings.html"),
@@ -539,8 +606,9 @@ rule render_ecker_embeddings:
         features_dir = op.join(ECKER_RUN, "features"),
     log:
         op.join(ECKER_RUN, "logs", "render_ecker_embeddings.log"),
+    threads: 4
     shell:
-        _ecker_render_shell()
+        _ecker_render_shell(with_windows_annotation = True)
 
 
 rule render_fig_ecker_rmd:
@@ -550,6 +618,7 @@ rule render_fig_ecker_rmd:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_ecker.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [DRIVER_UTILS_R],
         entropy = op.join(ECKER_RUN, "ecker_entropy.rds"),
         groups_meta = op.join(ECKER_RUN, "ecker_groups_meta.rds"),
         umap_windows = op.join(ECKER_RUN, "ecker_umap_windows_i_total.rds"),
@@ -559,6 +628,7 @@ rule render_fig_ecker_rmd:
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(ECKER_RUN, "beds", "windows_annotation.tsv.gz"),
         manifest = op.join(ECKER_DATA, "cells.tsv"),
     output:
         html = op.join(ECKER_RUN, "fig_ecker.html"),
@@ -568,5 +638,6 @@ rule render_fig_ecker_rmd:
         features_dir = op.join(ECKER_RUN, "features"),
     log:
         op.join(ECKER_RUN, "logs", "render_fig_ecker.log"),
+    threads: 4
     shell:
-        _ecker_render_shell()
+        _ecker_render_shell(with_windows_annotation = True)

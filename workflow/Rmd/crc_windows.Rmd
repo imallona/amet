@@ -21,11 +21,9 @@ params:
 ---
 
 ```{r logging_early, include = FALSE}
-if (nzchar(params$log_path)) {
-  log_con <- file(params$log_path, open = "at")
-  sink(log_con)
-  sink(log_con, type = "message")
-}
+source(file.path(dirname(knitr::current_input()), "..", "scripts",
+                 "render_logging.R"))
+amet_setup_render_logging(params$log_path)
 ```
 
 ```{r, setup}
@@ -78,10 +76,6 @@ opts_chunk$set(
   message = TRUE
 )
 
-## render on error hook
-knitr::knit_hooks$set(error = function(x, options) {
-  knitr::knit_exit()
-})
 ```
 
 
@@ -331,6 +325,9 @@ stopifnot(exists("windows_sce"))
 sce_path <- file.path(params$out_dir, "sce_windows_colon.rds")
 dir.create(dirname(sce_path), showWarnings = FALSE, recursive = TRUE)
 saveRDS(windows_sce, file = sce_path)
+message("save_sce_windows: wrote ", sce_path, " (",
+        file.size(sce_path), " bytes, dim ",
+        paste(dim(windows_sce), collapse = "x"), ")")
 ```
 
 # QC  {.tabset .tabset-pills}
@@ -847,7 +844,11 @@ table(de$mp_vs_nc$coefs_df$adj_p < 0.05)
 
 ```{r save_de_list, cache = FALSE, error = FALSE}
 stopifnot(exists("de"))
-saveRDS(de, file = file.path(params$out_dir, "de_list.rds"))
+de_path <- file.path(params$out_dir, "de_list.rds")
+message("save_de_list: de has ", length(de), " entries (",
+        paste(names(de), collapse = ", "), ")")
+saveRDS(de, file = de_path)
+message("save_de_list: wrote ", de_path, " (", file.size(de_path), " bytes)")
 ```
 
 # Plotting {.tabset .tabset-pills}

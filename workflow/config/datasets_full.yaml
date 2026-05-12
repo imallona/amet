@@ -1,0 +1,58 @@
+## Dataset analyses for amet -- FULL config.
+##
+## Runs every (patient, location) for CRC, every (sub_region, sub_type) in
+## the configured region for Ecker, every (stage, lineage) for Argelaguet.
+## Caps cells per per-combo stratum at full.max_cells_per_combo (coverage-
+## ranked, plate-balanced where applicable). Outputs land in
+## results/<dataset>_full/.
+
+prototype:
+  enabled: false
+  cells_per_group: 10           # unused in full, kept so helpers can read it
+  features_subset: 200          # unused (no rule currently consumes it)
+
+full:
+  max_cells_per_combo: 30       # cap per per-combo stratum
+
+barbara:
+  host: barbara
+  user: imallona
+
+argelaguet:
+  group_column: lineage10x
+  meta_remote: /home/imallona/src/yamet/workflow/argelaguet/sample_metadata.txt
+  cpg_level_remote: /home/imallona/src/yamet/workflow/argelaguet/met/cpg_level
+  features_remote: /home/imallona/src/yamet/workflow/argelaguet/features/genomic_contexts
+  metadata_path: ""
+  cells_dir: ""
+  features_dir: ""
+  mm10_dir: ""
+  assembly: mm10
+  window_size: 500000
+
+ecker:
+  group_column: sub_type
+  raw_remote: /home/imallona/src/yamet/workflow/data/brain/raw
+  meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
+  nemo_meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/MOp_Metadata.tsv.gz
+  raw_dir: ""
+  xlsx_path: ""
+  nemo_meta_path: ""
+  assembly: mm10
+  window_size: 10000
+  region_filter: MOp
+
+crc:
+  group_column: location
+  raw_remote: /home/imallona/src/yamet/workflow/data/crc/raw
+  raw_dir: ""
+  hg19_dir: ""
+  assembly: hg19
+  window_size: 10000
+
+amet:
+  i_max_lag: 3
+  min_cpgs_per_feature: 5
+  min_cells_per_group_proto: 2
+  min_cells_per_group_full: 10
+  meth_call_threshold: 0.1

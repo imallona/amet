@@ -160,8 +160,8 @@ checkpoint crc_make_manifest:
         """
         Rscript {workflow.basedir}/scripts/make_manifest_crc.R \
             --raw_dir {params.raw_dir} \
-            --proto_patients {params.proto_patients} \
-            --proto_locations {params.proto_locations} \
+            --proto_patients "{params.proto_patients}" \
+            --proto_locations "{params.proto_locations}" \
             --cells_per_group {params.cells_per_group} \
             --prototype {params.prototype} \
             --out {output.manifest} &> {log}

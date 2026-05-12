@@ -72,11 +72,12 @@ ecker:
   ## sub_type names follow the Liu 2021 supplement convention (space-separated,
   ## e.g. "IT-L23 Cux1"). Picked from the alphabetic-first slice that
   ## sync_from_barbara.sh pulls.
-  ## proto_cell_types: uncomment when prototype.enabled is true to keep only
-  ## these sub_types. Empty/commented = no sub_type filter (use the whole region).
-  # proto_cell_types:
-  #   - "IT-L23 Cux1"
-  #   - "IT-L4 Shc3"
+  ## Proto keeps only these sub_types. Uncomment / edit while
+  ## prototype.enabled is true. Commented out = no sub_type filter
+  ## (use the whole region).
+  proto_cell_types:
+    - "IT-L23 Cux1"
+    - "IT-L4 Shc3"
 
 crc:
   run_name: crc_proto
@@ -89,15 +90,15 @@ crc:
   hg19_dir: ""
   assembly: hg19
   window_size: 10000
-  ## proto_patients / proto_locations: uncomment when prototype.enabled is
-  ## true to restrict CRC to these patients and locations. Empty/commented =
-  ## no patient or location filter (every (patient, location) combo runs).
-  # proto_patients:
-  #   - CRC01
-  # proto_locations:
-  #   - NC
-  #   - PT
-  #   - LN
+  ## Proto restricts CRC to these patients and locations. Uncomment / edit
+  ## while prototype.enabled is true. Commented out = no filter (every
+  ## (patient, location) combo runs).
+  proto_patients:
+    - CRC01
+  proto_locations:
+    - NC
+    - PT
+    - LN
 
 amet:
   i_max_lag: 3

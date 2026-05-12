@@ -26,7 +26,8 @@ amet/
     Snakefile                  simulations + dispatch to the three dataset rule files
     config/
       sim.yaml                 simulation parameters
-      datasets.yaml            dataset paths, prototype subsets, window sizes
+      datasets_proto.yaml      dataset paths + small proto strata + cell cap
+      datasets_full.yaml       same paths, full grid, larger cell cap
     envs/                      conda envs (rust, bedtools, r-tools, python)
     rules/
       common.smk               build_amet, fetch FASTAs, build_cpg_reference
@@ -79,32 +80,36 @@ amet --build-cpg-only --genome mm10.fa
 The `Makefile` is the top-level entry point. From the repo root:
 
 ```
-make argelaguet      # whole-genome Argelaguet (4 Rmds)
-make crc             # whole-genome CRC (6 Rmds)
-make ecker           # whole-genome Ecker (4 Rmds)
-make simulations     # simulation report
-make all             # everything above
-make dryrun          # snakemake -n for all targets
-make unlock          # release a stale snakemake lock
-make help            # target list
+make argelaguet                 # proto by default (results/argelaguet_proto/)
+make crc MODE=full              # full grid (results/crc_full/)
+make ecker MODE=proto           # explicit proto
+make simulations                # simulation report (MODE-agnostic)
+make all MODE=full              # simulations + 3 datasets in full mode
+make dryrun MODE=full           # snakemake -n for everything (full)
+make unlock                     # release a stale snakemake lock
+make help                       # target list + active config
 ```
 
 Tunable variables:
 
 | Variable | Default | Description |
 |---|---|---|
+| `MODE` | `proto` | `proto` or `full`; picks `workflow/config/datasets_$(MODE).yaml` |
 | `CORES` | 16 | Snakemake `--cores` value |
 | `ULIMIT_KB` | 209715200 (200 GB) | Virtual-memory cap; inherited by every amet job |
 | `CONDA_ENV` | `snakemake` | Conda env that holds snakemake |
 | `CONDA_INIT` | `~/miniconda3/bin/activate` | Conda activation script |
 
-Override on the command line, e.g. `make argelaguet CORES=32`.
+Override on the command line, e.g. `make argelaguet MODE=full CORES=32`.
 
 ### Prototype vs full-run
 
-`workflow/config/datasets.yaml` carries a `prototype:` block. With `prototype.enabled: true` (the default), each dataset's manifest builder caps cells per stratum and restricts to a small list of strata so the runs finish in minutes. Output goes to `results/<dataset>_proto/`.
+Two config files in `workflow/config/`:
 
-For full publication runs, set `prototype.enabled: false` and change each dataset's `run_name` (e.g., from `argelaguet_proto` to `argelaguet`) so the full outputs don't overwrite the prototype ones.
+- **`datasets_proto.yaml`** -- restricts CRC to `CRC01` x `NC/PT/LN`, Ecker to a handful of MOp sub_types, and caps cells per per-combo stratum at 10. Outputs land in `results/<dataset>_proto/`. Picked when `MODE=proto` (the default).
+- **`datasets_full.yaml`** -- runs every patient x location for CRC, every (sub_region, sub_type) in the configured region for Ecker, every (stage, lineage) for Argelaguet. Caps cells per per-combo stratum at 30, coverage-ranked and plate-balanced (Argelaguet, Ecker). Outputs land in `results/<dataset>_full/`. Picked when `MODE=full`.
+
+The two modes use distinct output directories (`<dataset>_proto/` vs `<dataset>_full/`), so a full run does not clobber an earlier proto run, and vice versa.
 
 ### Window sizes
 

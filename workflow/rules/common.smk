@@ -41,9 +41,12 @@ def dataset_run_name(name):
 
 def proto_csv(dataset, key):
     """Return the comma-joined config[dataset][key] list, or empty string if
-    the key is missing or unset. Used so the proto_* filter lists in
-    datasets.yaml can be commented out for full runs without breaking rule
-    parsing; the manifest builder scripts already no-op on an empty filter."""
+    the workflow is in full mode (prototype.enabled = false) or the key is
+    missing/unset. The manifest builder scripts already no-op on an empty
+    filter, so this keeps the shell templates simple while making it explicit
+    in the rule log that no proto filter is being applied in full runs."""
+    if not config["prototype"]["enabled"]:
+        return ""
     vals = config.get(dataset, {}).get(key) or []
     return ",".join(vals)
 

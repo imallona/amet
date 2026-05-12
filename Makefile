@@ -38,8 +38,10 @@ DATASETS_CONFIG := config/datasets_$(MODE).yaml
 ACTIVATE := source $(CONDA_INIT) && conda activate $(CONDA_ENV) && \
             ulimit -v $(ULIMIT_KB)
 
+## The trailing `--` stops snakemake's option parsing so subsequent positional
+## tokens are unambiguously targets, not extra --configfile values.
 SNAKEMAKE := snakemake --use-conda --cores $(CORES) -p \
-             --configfile $(DATASETS_CONFIG)
+             --configfile $(DATASETS_CONFIG) --
 
 .PHONY: all simulations argelaguet crc ecker dryrun unlock clean help \
         setup-barbara
@@ -64,7 +66,7 @@ ecker:
 dryrun:
 	cd $(WORKFLOW_DIR) && bash -c '$(ACTIVATE) && \
 	  snakemake --cores $(CORES) --configfile $(DATASETS_CONFIG) \
-	  -n simulations argelaguet crc ecker'
+	  -n -- simulations argelaguet crc ecker'
 
 unlock:
 	cd $(WORKFLOW_DIR) && bash -c '$(ACTIVATE) && snakemake --unlock'

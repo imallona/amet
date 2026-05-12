@@ -84,11 +84,23 @@ parse_combo_base <- function(base) {
 
 ## Aggregate per cell at read time: feat_cf goes from O(cells * features
 ## * strata) rows to O(cells * strata). Downstream plots average per cell.
+## amet can emit a near-empty .feature.tsv.gz when a combo has no groups
+## passing min_cells_per_group; the cell-level file may also be tiny. Guard
+## both readers so a dropped combo doesn't kill the whole report.
 read_combo_cf <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
   meta <- parse_combo_base(base)
-  dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
+  if (file.info(fp)$size < 30) {
+    message("[load_amet] skipping near-empty cell_feature file: ", fn)
+    return(NULL)
+  }
+  dt <- tryCatch(fread(fp, select = c("cell_id", "mean_meth", "i_total")),
+                 error = function(e) {
+                   message("[load_amet] failed to read ", fn, ": ", conditionMessage(e))
+                   NULL
+                 })
+  if (is.null(dt) || nrow(dt) == 0L) return(NULL)
   agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
                 i_total = mean(i_total, na.rm = TRUE)),
             by = cell_id]
@@ -103,7 +115,16 @@ read_combo_fe <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
   meta <- parse_combo_base(base)
-  dt <- fread(fp)
+  if (file.info(fp)$size < 30) {
+    message("[load_amet] skipping near-empty feature file: ", fn)
+    return(NULL)
+  }
+  dt <- tryCatch(fread(fp),
+                 error = function(e) {
+                   message("[load_amet] failed to read ", fn, ": ", conditionMessage(e))
+                   NULL
+                 })
+  if (is.null(dt) || nrow(dt) == 0L) return(NULL)
   dt[, subcat := meta$subcat]
   dt[, cat := meta$cat]
   dt[, patient := meta$patient]

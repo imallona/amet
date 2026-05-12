@@ -1,7 +1,8 @@
 ## Dataset analyses for amet -- FULL config.
 ##
-## Runs every (patient, location) for CRC, every (sub_region, sub_type) in
-## the configured region for Ecker, every (stage, lineage) for Argelaguet.
+## Runs every (patient, location) for CRC, every (region, sub_type) within
+## the configured region_filter for Ecker, every (stage, lineage) for
+## Argelaguet.
 ## Caps cells per per-combo stratum at full.max_cells_per_combo (coverage-
 ## ranked, plate-balanced where applicable). Outputs land in
 ## results/<dataset>_full/.

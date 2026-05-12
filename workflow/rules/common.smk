@@ -12,8 +12,15 @@ REFS = op.join(RESULTS, "refs")
 ## per-Rmd extras (driver_utils.R, diff_testing.R, embedding_utils.R).
 ## Per-(group-stratum, plate) cell cap. In prototype mode this matches the
 ## small reproducible subset; in full runs it comes from `full.max_cells_per_combo`.
+def _prototype_enabled():
+    """True when the active configfile turned prototype mode on. Defaults to
+    True so running `snakemake simulations` with only sim.yaml loaded still
+    parses (dataset paths get the proto suffix but aren't materialised)."""
+    return bool(config.get("prototype", {}).get("enabled", True))
+
+
 def max_cells_per_combo():
-    if config["prototype"]["enabled"]:
+    if _prototype_enabled():
         return int(config["prototype"]["cells_per_group"])
     return int(config["full"]["max_cells_per_combo"])
 
@@ -21,7 +28,7 @@ def max_cells_per_combo():
 def min_cells_per_group():
     """Min cells per stratum before amet emits jsd. Proto is permissive; full
     matches amet's own default (10) to suppress noisy small-group estimates."""
-    key = "min_cells_per_group_proto" if config["prototype"]["enabled"] \
+    key = "min_cells_per_group_proto" if _prototype_enabled() \
           else "min_cells_per_group_full"
     return int(config["amet"][key])
 
@@ -29,7 +36,7 @@ def min_cells_per_group():
 def run_suffix():
     """`proto` when prototype.enabled is true, otherwise `full`. Used to suffix
     each dataset's run_name so proto and full outputs live in distinct dirs."""
-    return "proto" if config["prototype"]["enabled"] else "full"
+    return "proto" if _prototype_enabled() else "full"
 
 
 def dataset_run_name(name):
@@ -45,7 +52,7 @@ def proto_csv(dataset, key):
     missing/unset. The manifest builder scripts already no-op on an empty
     filter, so this keeps the shell templates simple while making it explicit
     in the rule log that no proto filter is being applied in full runs."""
-    if not config["prototype"]["enabled"]:
+    if not _prototype_enabled():
         return ""
     vals = config.get(dataset, {}).get(key) or []
     return ",".join(vals)

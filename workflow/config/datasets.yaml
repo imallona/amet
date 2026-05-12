@@ -45,8 +45,10 @@ argelaguet:
   mm10_dir: ""
   assembly: mm10
   window_size: 500000
-  ## proto_lineages: uncomment to restrict prototype runs to a subset.
-  ## Currently unused (no smk rule reads it).
+  ## proto_lineages: when prototype.enabled is true, restrict the manifest
+  ## step to this lineage subset (make_manifest_argelaguet.R reads it via
+  ## proto_csv("argelaguet", "proto_lineages")). Comment out to keep all
+  ## lineages in proto runs.
   # proto_lineages:
   #   - Epiblast
   #   - Primitive_endoderm

@@ -363,8 +363,10 @@ if (annotation_mat_ok && "CRC01" %in% colData(windows_sce)$patient) {
         stringsAsFactors = FALSE
       )
     })
+    coldata_crc01 <- as.data.frame(colData(crc01))
+    coldata_crc01$cell <- colnames(crc01)
     df_crc01 <- bind_rows(df_list) %>%
-      left_join(as.data.frame(colData(crc01))[, c("cell", "location", "patient")],
+      left_join(coldata_crc01[, c("cell", "location", "patient")],
                 by = "cell")
     df_crc01$bin <- factor(df_crc01$bin, levels = c(0, 1))
 

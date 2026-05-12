@@ -73,7 +73,8 @@ Mouse (mm10), CpG context only.
 ## filenames: {annotation}_{region}_{sub_type}.*.gz
 ## annotation has no underscores; neither do region or sub_type values
 get_annotation <- function(fn) sub("^(.*)_[^_]+_[^_]+\\..*$", "\\1", fn)
-get_sub_region <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$", "\\1", fn)
+## Slab axis (e.g. 2C/3C/4B/5D), second-to-last filename token.
+get_region <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$", "\\1", fn)
 get_sub_type <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",   "\\1", fn)
 
 ann_labels <- c(
@@ -145,16 +146,27 @@ fe_files <- fe_files[!grepl("\\.cell_feature\\.tsv\\.gz$", fe_files)]
 ## Aggregate per cell at read time so feat_cf collapses from O(cells *
 ## features * strata * annotations) rows to O(cells * strata * annotations).
 ## Every downstream plot/embedding averages over features per cell.
+## Same guard as in argelaguet.Rmd: amet may produce a near-empty
+## .feature.tsv.gz when a combo has no groups passing min_cells_per_group.
 read_combo_cf <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
   bx <- paste0(base, ".x")
-  dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
+  if (file.info(fp)$size < 30) {
+    message("[load_amet] skipping near-empty cell_feature file: ", fn)
+    return(NULL)
+  }
+  dt <- tryCatch(fread(fp, select = c("cell_id", "mean_meth", "i_total")),
+                 error = function(e) {
+                   message("[load_amet] failed to read ", fn, ": ", conditionMessage(e))
+                   NULL
+                 })
+  if (is.null(dt) || nrow(dt) == 0L) return(NULL)
   agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
                 i_total = mean(i_total, na.rm = TRUE)),
             by = cell_id]
   agg[, annotation := get_annotation(bx)]
-  agg[, region := get_sub_region(bx)]
+  agg[, region := get_region(bx)]
   agg[, sub_type := get_sub_type(bx)]
   agg
 }
@@ -163,9 +175,18 @@ read_combo_fe <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
   bx <- paste0(base, ".x")
-  dt <- fread(fp)
+  if (file.info(fp)$size < 30) {
+    message("[load_amet] skipping near-empty feature file: ", fn)
+    return(NULL)
+  }
+  dt <- tryCatch(fread(fp),
+                 error = function(e) {
+                   message("[load_amet] failed to read ", fn, ": ", conditionMessage(e))
+                   NULL
+                 })
+  if (is.null(dt) || nrow(dt) == 0L) return(NULL)
   dt[, annotation := get_annotation(bx)]
-  dt[, region := get_sub_region(bx)]
+  dt[, region := get_region(bx)]
   dt[, sub_type := get_sub_type(bx)]
   dt
 }

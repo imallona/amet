@@ -9,6 +9,3 @@ amet currently has two distinct ways of expressing a "methylation-decoupled" wit
 
 These are different quantities computed by different math. Pick one canonical decoupling strategy (or document the regimes where each is preferred) and harmonize naming across the simulations, evals, dataset Rmds, and figure Rmds.
 
-## `amet:` block conflict between sim.yaml and datasets.yaml
-
-`workflow/Snakefile` loads `sim.yaml` then `datasets.yaml`. Both files define an `amet:` block, so the second one (datasets.yaml, `min_cells_per_group: 2`) silently overrides the first (sim.yaml, `min_cells_per_group: 10`). Result: simulation rules run with the dataset floor of 2 instead of the intended simulation floor of 10. Fix options: move the simulation-only amet defaults under a `sim.amet:` namespace and update the smk rules to read the namespaced keys, or pass per-rule `min_cells` literals from the Snakefile so the sim and dataset paths cannot collide on the same key.

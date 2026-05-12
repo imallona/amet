@@ -49,8 +49,8 @@ ent            <- readRDS("argelaguet_entropy.rds")
 grp_meta       <- readRDS("argelaguet_groups_meta.rds")
 cell_umap_adjS <- readRDS("argelaguet_umap_cell_i_total.rds")
 
-cell_df <- if (file.exists("argelaguet_per_cell_summary.csv"))
-  read.csv("argelaguet_per_cell_summary.csv", stringsAsFactors = FALSE) else NULL
+cell_df <- if (file.exists("argelaguet_embeddings_per_cell_summary.csv"))
+  read.csv("argelaguet_embeddings_per_cell_summary.csv", stringsAsFactors = FALSE) else NULL
 ve_long <- if (file.exists("argelaguet_win_varexp.csv"))
   read.csv("argelaguet_win_varexp.csv", stringsAsFactors = FALSE) else NULL
 ```
@@ -194,7 +194,7 @@ pC_v2 <- mk_cell_umap("lineage", argelaguet_lineage_pal,         "lineage")
 mk_meth_s_scatter <- function(color_col, pal, lab) {
   if (is.null(cell_df)) {
     return(patchwork::plot_spacer() +
-             labs(title = "argelaguet_per_cell_summary.csv missing"))
+             labs(title = "argelaguet_embeddings_per_cell_summary.csv missing"))
   }
   df <- cell_df
   df[[color_col]] <- factor(df[[color_col]])

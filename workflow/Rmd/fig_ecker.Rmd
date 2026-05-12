@@ -50,8 +50,8 @@ win_umap     <- readRDS("ecker_umap_windows_i_total.rds")
 
 ve_long <- if (file.exists("ecker_win_varexp.csv"))
              read.csv("ecker_win_varexp.csv", stringsAsFactors = FALSE) else NULL
-cell_df <- if (file.exists("ecker_per_cell_summary.csv"))
-             read.csv("ecker_per_cell_summary.csv", stringsAsFactors = FALSE) else NULL
+cell_df <- if (file.exists("ecker_embeddings_per_cell_summary.csv"))
+             read.csv("ecker_embeddings_per_cell_summary.csv", stringsAsFactors = FALSE) else NULL
 ```
 
 ```{r embedding_diagnostics_report}
@@ -297,7 +297,7 @@ if (!is.null(cell_df)) {
           plot.margin        = margin(0, 0, 0, 0, "mm"))
 } else {
   pE_v2 <- patchwork::plot_spacer() +
-    labs(title = "ecker_per_cell_summary.csv missing")
+    labs(title = "ecker_embeddings_per_cell_summary.csv missing")
 }
 ```
 

@@ -351,7 +351,7 @@ def _argelaguet_render_shell():
     return r"""
         mkdir -p {params.out_dir}
         Rscript -e 'rmarkdown::render("{input.rmd}",
-            output_file="{wildcards.rmd_name}.html",
+            output_file="{params.rmd_name}.html",
             output_dir="{params.out_dir}",
             knit_root_dir="{params.out_dir}",
             params=list(
@@ -365,56 +365,110 @@ def _argelaguet_render_shell():
         """
 
 
-rule render_argelaguet_analytical_rmd:
-    """Render one of the three analytical Rmds (argelaguet, _embeddings,
-    _windows). Inputs cover the full {annotation x stage x lineage} grid
-    (one TSV pair per combo) plus the windows-all-cells run."""
-    wildcard_constraints:
-        rmd_name = "argelaguet|argelaguet_embeddings|argelaguet_windows",
+## The three analytical Argelaguet Rmds are independent (no cross-Rmd RDS
+## chain); fig_argelaguet.Rmd consumes their RDS/CSV intermediates. RDS/CSV
+## files are declared as snakemake outputs/inputs so the graph captures the
+## wiring.
+
+
+rule render_argelaguet:
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet.Rmd"),
         features = list_argelaguet_features_outputs,
         win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
         manifest = op.join(ARG_DATA, "cells.tsv"),
     output:
-        html = op.join(ARG_RUN, "{rmd_name}.html"),
+        html = op.join(ARG_RUN, "argelaguet.html"),
+        entropy = op.join(ARG_RUN, "argelaguet_entropy.rds"),
+        groups_meta = op.join(ARG_RUN, "argelaguet_groups_meta.rds"),
+        cell_matrices = op.join(ARG_RUN, "argelaguet_cell_matrices.rds"),
+        umap_cell_adjS = op.join(ARG_RUN, "argelaguet_umap_cell_i_total.rds"),
+        umap_cell_meth = op.join(ARG_RUN, "argelaguet_umap_cell_meth.rds"),
+        umap_grp_jsd = op.join(ARG_RUN, "argelaguet_umap_grp_jsd.rds"),
     params:
+        rmd_name = "argelaguet",
         out_dir = ARG_RUN,
         features_dir = op.join(ARG_RUN, "features"),
     log:
-        op.join(ARG_RUN, "logs", "render_{rmd_name}.log"),
+        op.join(ARG_RUN, "logs", "render_argelaguet.log"),
+    shell:
+        _argelaguet_render_shell()
+
+
+rule render_argelaguet_windows:
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet_windows.Rmd"),
+        win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
+        manifest = op.join(ARG_DATA, "cells.tsv"),
+    output:
+        html = op.join(ARG_RUN, "argelaguet_windows.html"),
+        per_cell_summary = op.join(ARG_RUN, "argelaguet_windows_per_cell_summary.csv"),
+    params:
+        rmd_name = "argelaguet_windows",
+        out_dir = ARG_RUN,
+        features_dir = op.join(ARG_RUN, "features"),
+    log:
+        op.join(ARG_RUN, "logs", "render_argelaguet_windows.log"),
+    shell:
+        _argelaguet_render_shell()
+
+
+rule render_argelaguet_embeddings:
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "argelaguet_embeddings.Rmd"),
+        win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
+        manifest = op.join(ARG_DATA, "cells.tsv"),
+    output:
+        html = op.join(ARG_RUN, "argelaguet_embeddings.html"),
+        umap_windows = op.join(ARG_RUN, "argelaguet_umap_windows_i_total.rds"),
+        per_cell_summary = op.join(ARG_RUN, "argelaguet_embeddings_per_cell_summary.csv"),
+        win_varexp = op.join(ARG_RUN, "argelaguet_win_varexp.csv"),
+    params:
+        rmd_name = "argelaguet_embeddings",
+        out_dir = ARG_RUN,
+        features_dir = op.join(ARG_RUN, "features"),
+    log:
+        op.join(ARG_RUN, "logs", "render_argelaguet_embeddings.log"),
     shell:
         _argelaguet_render_shell()
 
 
 rule render_fig_argelaguet_rmd:
-    """Render fig_argelaguet.Rmd; depends on the three analytical Rmds because
-    it loads their RDS intermediates."""
-    wildcard_constraints:
-        rmd_name = "fig_argelaguet",
+    """Render fig_argelaguet.Rmd; consumes RDS/CSV intermediates from the
+    three analytical rules above."""
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
-        analytical = expand(op.join(ARG_RUN, "{r}.html"),
-                            r = ["argelaguet",
-                                 "argelaguet_embeddings",
-                                 "argelaguet_windows"]),
-        features = list_argelaguet_features_outputs,
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_argelaguet.Rmd"),
+        entropy = op.join(ARG_RUN, "argelaguet_entropy.rds"),
+        groups_meta = op.join(ARG_RUN, "argelaguet_groups_meta.rds"),
+        cell_matrices = op.join(ARG_RUN, "argelaguet_cell_matrices.rds"),
+        umap_cell_adjS = op.join(ARG_RUN, "argelaguet_umap_cell_i_total.rds"),
+        per_cell_summary = op.join(ARG_RUN, "argelaguet_embeddings_per_cell_summary.csv"),
+        win_varexp = op.join(ARG_RUN, "argelaguet_win_varexp.csv"),
         win_cell_feature = op.join(ARG_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ARG_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ARG_RUN, "beds", "windows.bed"),
         manifest = op.join(ARG_DATA, "cells.tsv"),
     output:
-        html = op.join(ARG_RUN, "{rmd_name}.html"),
+        html = op.join(ARG_RUN, "fig_argelaguet.html"),
     params:
+        rmd_name = "fig_argelaguet",
         out_dir = ARG_RUN,
         features_dir = op.join(ARG_RUN, "features"),
     log:
-        op.join(ARG_RUN, "logs", "render_{rmd_name}.log"),
+        op.join(ARG_RUN, "logs", "render_fig_argelaguet.log"),
     shell:
         _argelaguet_render_shell()

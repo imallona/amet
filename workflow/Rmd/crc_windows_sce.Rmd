@@ -71,8 +71,14 @@ opts_chunk$set(
 
 
 ```{r}
-windows_sce <- readRDS(params$windows_sce)
-de          <- readRDS(params$de)
+windows_sce_path <- if (nzchar(params$windows_sce))
+                      params$windows_sce else
+                      file.path(params$out_dir, "sce_windows_colon.rds")
+de_path <- if (nzchar(params$de))
+             params$de else
+             file.path(params$out_dir, "de_list.rds")
+windows_sce <- readRDS(windows_sce_path)
+de <- readRDS(de_path)
 ```
 
 Let's get some basic stats about numbers of up/down, per comparison
@@ -245,7 +251,7 @@ Row annotation (rowData) is re-read from the annotation file here because the SC
 amet's window BED has only (chrom, start, end, feature_id) and so carries no per-window genomic-feature columns. The annotation reader is replaced with a no-op; binarized annotation columns and their downstream plots are not portable.
 
 
-```{r}
+```{r save_corrected_sce, cache = FALSE}
 ## The annotation merge / binarization pipeline cannot run on amet's window
 ## BED. Save the corrected SCE as-is.
 

@@ -86,7 +86,10 @@ N_PCS <- 10    ## PCs to compute
 # Load data
 
 ```{r load_sce}
-windows_sce <- readRDS(params$corrected_sce)
+corrected_sce_path <- if (nzchar(params$corrected_sce))
+                       params$corrected_sce else
+                       file.path(params$out_dir, "sce_windows_colon_corrected.rds")
+windows_sce <- readRDS(corrected_sce_path)
 colData(windows_sce)$location <- factor(colData(windows_sce)$location, levels = loc_levels)
 
 cat("Cells:", ncol(windows_sce), "\n")
@@ -185,12 +188,16 @@ for (nm in names(win_embeds)) {
   }
 }
 
+```
+
+```{r save_win_embeds_debug, cache = FALSE}
 saveRDS(list(col_data = as.data.frame(colData(windows_sce)),
              row_data = as.data.frame(rowData(windows_sce)),
              assay_names = assayNames(windows_sce),
              sce_dim = dim(windows_sce),
              win_embeds = win_embeds, assay_map = assay_map),
-        "crc_embeddings_debug.rds", compress = "xz")
+        file.path(params$out_dir, "crc_embeddings_debug.rds"),
+        compress = "xz")
 ```
 
 ## By location {.tabset .tabset-pills}
@@ -261,10 +268,6 @@ ggplot(df_win_pca, aes(x = PC1, y = PC2, color = location)) +
 ## Variance explained
 
 ```{r win_varexp, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(2, 1)$h}
-saveRDS(list(win_embeds = win_embeds, assay_map = assay_map,
-             sce_dim = dim(windows_sce)),
-        "crc_win_varexp_debug.rds", compress = "xz")
-
 ve_win <- bind_rows(lapply(names(assay_map), function(akey) {
   lbl <- assay_map[[akey]]
   if (is.null(win_embeds[[lbl]])) return(NULL)
@@ -292,7 +295,15 @@ ggplot(ve_win_long, aes(x = assay, y = median_ve, fill = variable)) +
        title = "Variance explained (per-window HVW)") +
   theme_ng()
 
-write.csv(ve_win_long, "crc_win_varexp.csv", row.names = FALSE)
+```
+
+```{r save_win_varexp, cache = FALSE}
+saveRDS(list(win_embeds = win_embeds, assay_map = assay_map,
+             sce_dim = dim(windows_sce)),
+        file.path(params$out_dir, "crc_win_varexp_debug.rds"),
+        compress = "xz")
+write.csv(ve_win_long, file.path(params$out_dir, "crc_win_varexp.csv"),
+          row.names = FALSE)
 ```
 
 ## Silhouette scores
@@ -337,13 +348,17 @@ ggplot(sil_all, aes(x = assay, y = silhouette, fill = feature_space)) +
 
 ```{r cell_summary_df}
 cell_df <- data.frame(
-  location  = colData(windows_sce)$location,
-  patient   = colData(windows_sce)$patient,
-  mean_S    = colMeans(assay(windows_sce, "sampen"),           na.rm = TRUE),
+  location = colData(windows_sce)$location,
+  patient = colData(windows_sce)$patient,
+  mean_S = colMeans(assay(windows_sce, "sampen"), na.rm = TRUE),
   mean_adjS = colMeans(assay(windows_sce, "sampen_corrected"), na.rm = TRUE),
-  mean_meth = colMeans(assay(windows_sce, "meth"),             na.rm = TRUE)
+  mean_meth = colMeans(assay(windows_sce, "meth"), na.rm = TRUE)
 )
-write.csv(cell_df, "crc_per_cell_summary.csv", row.names = FALSE)
+```
+
+```{r save_cell_summary, cache = FALSE}
+write.csv(cell_df, file.path(params$out_dir, "crc_per_cell_summary.csv"),
+          row.names = FALSE)
 ```
 
 ```{r violins, fig.width = ng_fig_size(6, 1)$w, fig.height = ng_fig_size(6, 3)$h}

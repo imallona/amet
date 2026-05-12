@@ -58,39 +58,48 @@ opts_chunk$set(
 These are amet feature TSVs (per (subcat, cat, patient, location) combo). Per-cell `i_total` from cell_feature.tsv.gz captures within-cell heterogeneity; per-feature `jsd` from feature.tsv.gz captures across-cell heterogeneity.
 
 ```{r, import_short_reports}
-## Filename parsers:
-##   feat: <subcat>_<cat>_<patient>_<location>.{cell_feature,feature}.tsv.gz
-get_subcat   <- function(fn) sub("^([^_]+)_[^_]+_[^_]+_[^_]+\\..*$", "\\1", fn)
-get_cat      <- function(fn) sub("^[^_]+_([^_]+)_[^_]+_[^_]+\\..*$", "\\1", fn)
-get_patient  <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$",          "\\1", fn)
-get_location <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",            "\\1", fn)
+## Filename layout: <subcat>_<cat>_<patient>_<location>.{cell_feature,feature}.tsv.gz
+## subcat may itself contain underscores (e.g., 0_Enhancer, crc01_nc_scna), so
+## we pin location, patient and cat to the last three tokens and let subcat
+## absorb the rest.
+parse_combo_base <- function(base) {
+  parts <- strsplit(base, "_", fixed = TRUE)[[1]]
+  n <- length(parts)
+  stopifnot(n >= 4)
+  list(
+    subcat = paste(parts[seq_len(n - 3)], collapse = "_"),
+    cat = parts[n - 2],
+    patient = parts[n - 1],
+    location = parts[n]
+  )
+}
 
 ## Aggregate per cell at read time: feat_cf goes from O(cells * features
 ## * strata) rows to O(cells * strata). Downstream plots average per cell.
 read_combo_cf <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.cell_feature\\.tsv\\.gz$", "", fn)
-  bx <- paste0(base, ".x")
+  meta <- parse_combo_base(base)
   dt <- fread(fp, select = c("cell_id", "mean_meth", "i_total"))
   agg <- dt[, .(mean_meth = mean(mean_meth, na.rm = TRUE),
                 i_total = mean(i_total, na.rm = TRUE)),
             by = cell_id]
-  agg[, subcat   := get_subcat(bx)]
-  agg[, cat      := get_cat(bx)]
-  agg[, patient  := get_patient(bx)]
-  agg[, location := get_location(bx)]
+  agg[, subcat := meta$subcat]
+  agg[, cat := meta$cat]
+  agg[, patient := meta$patient]
+  agg[, location := meta$location]
   agg
 }
 
 read_combo_fe <- function(fp) {
   fn <- basename(fp)
   base <- sub("\\.feature\\.tsv\\.gz$", "", fn)
-  bx <- paste0(base, ".x")
+  meta <- parse_combo_base(base)
   dt <- fread(fp)
-  dt[, subcat   := get_subcat(bx)]
-  dt[, cat      := get_cat(bx)]
-  dt[, patient  := get_patient(bx)]
-  dt[, location := get_location(bx)]
+  dt[, subcat := meta$subcat]
+  dt[, cat := meta$cat]
+  dt[, patient := meta$patient]
+  dt[, location := meta$location]
   dt
 }
 

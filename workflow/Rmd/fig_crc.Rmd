@@ -67,8 +67,11 @@ source(file.path(repo_root, "workflow", "scripts", "driver_utils.R"))
 ```
 
 ```{r single-page-load}
-de          <- readRDS(params$de)
-driver_df   <- readRDS("crc_driver_sd_range.rds")
+de_path <- if (nzchar(params$de))
+             params$de else
+             file.path(params$out_dir, "de_list.rds")
+de <- readRDS(de_path)
+driver_df <- readRDS("crc_driver_sd_range.rds")
 ve_win_long <- read.csv("crc_win_varexp.csv", stringsAsFactors = FALSE)
 cell_df_all <- read.csv("crc_per_cell_summary.csv", stringsAsFactors = FALSE)
 

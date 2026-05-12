@@ -88,7 +88,7 @@ cell_df <- win_cf[, .(
   mean_meth    = mean(mean_meth, na.rm = TRUE)
 ), by = .(cell_id, stage, lineage)]
 
-write.csv(cell_df, "argelaguet_per_cell_summary.csv", row.names = FALSE)
+write.csv(cell_df, "argelaguet_windows_per_cell_summary.csv", row.names = FALSE)
 ```
 
 <!-- Section dropped: amet has no raw S, so the sampen_by_stage chunk is not reproduced. -->

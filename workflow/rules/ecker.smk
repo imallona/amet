@@ -446,7 +446,7 @@ def _ecker_render_shell():
     return r"""
         mkdir -p {params.out_dir}
         Rscript -e 'rmarkdown::render("{input.rmd}",
-            output_file="{wildcards.rmd_name}.html",
+            output_file="{params.rmd_name}.html",
             output_dir="{params.out_dir}",
             knit_root_dir="{params.out_dir}",
             params=list(
@@ -460,55 +460,110 @@ def _ecker_render_shell():
         """
 
 
-rule render_ecker_analytical_rmd:
-    """Render one of the three analytical Ecker Rmds (ecker, _windows,
-    _embeddings). Each writes RDS/CSV intermediates that fig_ecker consumes."""
-    wildcard_constraints:
-        rmd_name = "ecker|ecker_windows|ecker_embeddings",
+## The three analytical Ecker Rmds are independent (no cross-Rmd RDS chain);
+## fig_ecker.Rmd consumes their RDS/CSV intermediates. RDS/CSV files are
+## declared as snakemake outputs/inputs so the graph captures the wiring.
+
+
+rule render_ecker:
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker.Rmd"),
         features = list_ecker_features_outputs,
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
         manifest = op.join(ECKER_DATA, "cells.tsv"),
     output:
-        html = op.join(ECKER_RUN, "{rmd_name}.html"),
+        html = op.join(ECKER_RUN, "ecker.html"),
+        entropy = op.join(ECKER_RUN, "ecker_entropy.rds"),
+        groups_meta = op.join(ECKER_RUN, "ecker_groups_meta.rds"),
+        cell_matrices = op.join(ECKER_RUN, "ecker_cell_matrices.rds"),
+        umap_cell_adjS = op.join(ECKER_RUN, "ecker_umap_cell_i_total.rds"),
+        umap_cell_meth = op.join(ECKER_RUN, "ecker_umap_cell_meth.rds"),
+        umap_grp_jsd = op.join(ECKER_RUN, "ecker_umap_grp_jsd.rds"),
     params:
+        rmd_name = "ecker",
         out_dir = ECKER_RUN,
         features_dir = op.join(ECKER_RUN, "features"),
     log:
-        op.join(ECKER_RUN, "logs", "render_{rmd_name}.log"),
+        op.join(ECKER_RUN, "logs", "render_ecker.log"),
+    shell:
+        _ecker_render_shell()
+
+
+rule render_ecker_windows:
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker_windows.Rmd"),
+        win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
+        manifest = op.join(ECKER_DATA, "cells.tsv"),
+    output:
+        html = op.join(ECKER_RUN, "ecker_windows.html"),
+        per_cell_summary = op.join(ECKER_RUN, "ecker_windows_per_cell_summary.csv"),
+    params:
+        rmd_name = "ecker_windows",
+        out_dir = ECKER_RUN,
+        features_dir = op.join(ECKER_RUN, "features"),
+    log:
+        op.join(ECKER_RUN, "logs", "render_ecker_windows.log"),
+    shell:
+        _ecker_render_shell()
+
+
+rule render_ecker_embeddings:
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker_embeddings.Rmd"),
+        win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
+        win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
+        manifest = op.join(ECKER_DATA, "cells.tsv"),
+    output:
+        html = op.join(ECKER_RUN, "ecker_embeddings.html"),
+        umap_windows = op.join(ECKER_RUN, "ecker_umap_windows_i_total.rds"),
+        per_cell_summary = op.join(ECKER_RUN, "ecker_embeddings_per_cell_summary.csv"),
+        win_varexp = op.join(ECKER_RUN, "ecker_win_varexp.csv"),
+        diagnostics = op.join(ECKER_RUN, "ecker_embedding_diagnostics.csv"),
+    params:
+        rmd_name = "ecker_embeddings",
+        out_dir = ECKER_RUN,
+        features_dir = op.join(ECKER_RUN, "features"),
+    log:
+        op.join(ECKER_RUN, "logs", "render_ecker_embeddings.log"),
     shell:
         _ecker_render_shell()
 
 
 rule render_fig_ecker_rmd:
-    """Render fig_ecker.Rmd; depends on the three analytical Rmds because
-    it loads their RDS intermediates."""
-    wildcard_constraints:
-        rmd_name = "fig_ecker",
+    """Render fig_ecker.Rmd; consumes RDS/CSV intermediates from the three
+    analytical rules above."""
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
-        analytical = expand(op.join(ECKER_RUN, "{r}.html"),
-                            r = ["ecker",
-                                 "ecker_windows",
-                                 "ecker_embeddings"]),
-        features = list_ecker_features_outputs,
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_ecker.Rmd"),
+        entropy = op.join(ECKER_RUN, "ecker_entropy.rds"),
+        groups_meta = op.join(ECKER_RUN, "ecker_groups_meta.rds"),
+        umap_windows = op.join(ECKER_RUN, "ecker_umap_windows_i_total.rds"),
+        win_varexp = op.join(ECKER_RUN, "ecker_win_varexp.csv"),
+        per_cell_summary = op.join(ECKER_RUN, "ecker_embeddings_per_cell_summary.csv"),
+        diagnostics = op.join(ECKER_RUN, "ecker_embedding_diagnostics.csv"),
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
         manifest = op.join(ECKER_DATA, "cells.tsv"),
     output:
-        html = op.join(ECKER_RUN, "{rmd_name}.html"),
+        html = op.join(ECKER_RUN, "fig_ecker.html"),
     params:
+        rmd_name = "fig_ecker",
         out_dir = ECKER_RUN,
         features_dir = op.join(ECKER_RUN, "features"),
     log:
-        op.join(ECKER_RUN, "logs", "render_{rmd_name}.log"),
+        op.join(ECKER_RUN, "logs", "render_fig_ecker.log"),
     shell:
         _ecker_render_shell()

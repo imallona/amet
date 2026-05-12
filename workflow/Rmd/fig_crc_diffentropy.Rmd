@@ -40,9 +40,15 @@ if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 ```
 
 ```{r load}
-de     <- readRDS(params$de)
+de_path <- if (nzchar(params$de))
+             params$de else
+             file.path(params$out_dir, "de_list.rds")
+corrected_sce_path <- if (nzchar(params$corrected_sce))
+                       params$corrected_sce else
+                       file.path(params$out_dir, "sce_windows_colon_corrected.rds")
+de <- readRDS(de_path)
 embeds <- readRDS("crc_embeddings_debug.rds")
-sce    <- readRDS(params$corrected_sce)
+sce <- readRDS(corrected_sce_path)
 ```
 
 ```{r de-summaries}

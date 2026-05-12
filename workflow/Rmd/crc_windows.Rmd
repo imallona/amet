@@ -315,11 +315,12 @@ stopifnot(
 assay(windows_sce, "meth") <- meth_mat
 
 rm(meth_mat)
+```
 
+```{r save_sce_windows, cache = FALSE}
 sce_path <- file.path(params$out_dir, "sce_windows_colon.rds")
 dir.create(dirname(sce_path), showWarnings = FALSE, recursive = TRUE)
 saveRDS(windows_sce, file = sce_path)
-saveRDS(windows_sce, file = "sce_windows_colon.rds")
 ```
 
 # QC  {.tabset .tabset-pills}
@@ -834,8 +835,8 @@ hist(de$mp_vs_nc$coefs_df$p_value)
 table(de$mp_vs_nc$coefs_df$adj_p < 0.05)
 ```
 
-```{r debug}
-saveRDS(de, file = 'de_list.rds')
+```{r save_de_list, cache = FALSE}
+saveRDS(de, file = file.path(params$out_dir, "de_list.rds"))
 ```
 
 # Plotting {.tabset .tabset-pills}

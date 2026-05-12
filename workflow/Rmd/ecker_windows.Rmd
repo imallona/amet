@@ -89,7 +89,7 @@ cell_df <- win_cf[, .(
   mean_meth    = mean(mean_meth, na.rm = TRUE)
 ), by = .(cell_id, cell_class, major_type)]
 
-write.csv(cell_df, "ecker_per_cell_summary.csv", row.names = FALSE)
+write.csv(cell_df, "ecker_windows_per_cell_summary.csv", row.names = FALSE)
 ```
 
 <!-- Section dropped: amet has no raw S, so the sampen_by_class chunk is not reproduced. -->

@@ -409,7 +409,8 @@ def _crc_render_shell():
                 windows_dir="{params.windows_dir}",
                 win_bed="{input.win_bed}",
                 manifest="{input.manifest}",
-                out_dir="{params.out_dir}"),
+                out_dir="{params.out_dir}",
+                log_path="{log}"),
             quiet=TRUE)' &> {log}
         """
 
@@ -517,32 +518,56 @@ rule render_crc_embeddings:
         _crc_render_shell()
 
 
-rule render_fig_crc_rmd:
-    """Render fig_crc.Rmd or fig_crc_diffentropy.Rmd; consumes RDS/CSV
-    intermediates from the four analytical rules above."""
-    wildcard_constraints:
-        rmd_name = "fig_crc|fig_crc_diffentropy",
+rule render_fig_crc:
+    """Compact CRC figure (single page panels A-H). Consumes the analytical
+    Rmds' entropy/driver/varexp/per-cell summaries plus the embeddings debug
+    RDS and the de_list."""
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_crc.Rmd"),
         entropy_summaries = op.join(CRC_RUN, "crc_entropy_summaries.rds"),
         driver_sd_range = op.join(CRC_RUN, "crc_driver_sd_range.rds"),
         embeddings_debug = op.join(CRC_RUN, "crc_embeddings_debug.rds"),
         win_varexp = op.join(CRC_RUN, "crc_win_varexp.csv"),
         per_cell_summary = op.join(CRC_RUN, "crc_per_cell_summary.csv"),
         de_list = op.join(CRC_RUN, "de_list.rds"),
-        corrected_sce = op.join(CRC_RUN, "sce_windows_colon_corrected.rds"),
         win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
         manifest = op.join(CRC_DATA, "cells.tsv"),
     output:
-        html = op.join(CRC_RUN, "{rmd_name}.html"),
+        html = op.join(CRC_RUN, "fig_crc.html"),
     params:
-        rmd_name = lambda wc: wc.rmd_name,
+        rmd_name = "fig_crc",
         out_dir = CRC_RUN,
         features_dir = op.join(CRC_RUN, "features"),
         windows_dir = op.join(CRC_RUN, "windows"),
     log:
-        op.join(CRC_RUN, "logs", "render_{rmd_name}.log"),
+        op.join(CRC_RUN, "logs", "render_fig_crc.log"),
+    shell:
+        _crc_render_shell()
+
+
+rule render_fig_crc_diffentropy:
+    """Differential-entropy CRC figure. Consumes de_list, the corrected SCE
+    and the embeddings debug RDS; does not need entropy/driver/varexp/per-cell
+    artifacts."""
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_crc_diffentropy.Rmd"),
+        de_list = op.join(CRC_RUN, "de_list.rds"),
+        embeddings_debug = op.join(CRC_RUN, "crc_embeddings_debug.rds"),
+        corrected_sce = op.join(CRC_RUN, "sce_windows_colon_corrected.rds"),
+        win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
+        manifest = op.join(CRC_DATA, "cells.tsv"),
+    output:
+        html = op.join(CRC_RUN, "fig_crc_diffentropy.html"),
+    params:
+        rmd_name = "fig_crc_diffentropy",
+        out_dir = CRC_RUN,
+        features_dir = op.join(CRC_RUN, "features"),
+        windows_dir = op.join(CRC_RUN, "windows"),
+    log:
+        op.join(CRC_RUN, "logs", "render_fig_crc_diffentropy.log"),
     shell:
         _crc_render_shell()

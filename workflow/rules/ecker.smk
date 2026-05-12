@@ -455,7 +455,8 @@ def _ecker_render_shell():
                 win_feature="{input.win_feature}",
                 win_bed="{input.win_bed}",
                 manifest="{input.manifest}",
-                out_dir="{params.out_dir}"),
+                out_dir="{params.out_dir}",
+                log_path="{log}"),
             quiet=TRUE)' &> {log}
         """
 

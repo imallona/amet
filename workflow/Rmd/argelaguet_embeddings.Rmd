@@ -17,7 +17,16 @@ params:
   win_bed: ""
   manifest: ""
   out_dir: ""
+  log_path: ""
 ---
+
+```{r logging_early, include = FALSE}
+if (nzchar(params$log_path)) {
+  log_con <- file(params$log_path, open = "at")
+  sink(log_con)
+  sink(log_con, type = "message")
+}
+```
 
 ```{r setup}
 suppressPackageStartupMessages({

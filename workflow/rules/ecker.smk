@@ -294,9 +294,10 @@ rule ecker_window_annotation_per_annotation:
     shell:
         r"""
         mkdir -p $(dirname {output.frac})
-        echo "{wildcards.annotation}" > {output.frac}
-        bedtools coverage -a {input.windows} -b {input.annotation} \
-          | cut -f7 >> {output.frac} 2> {log}
+        {{
+          echo "{wildcards.annotation}"
+          bedtools coverage -a {input.windows} -b {input.annotation} | cut -f7
+        }} > {output.frac} 2> {log}
         """
 
 
@@ -320,10 +321,12 @@ rule ecker_combine_window_annotations:
         r"""
         mkdir -p $(dirname {output.tsv})
         tmp=$(mktemp)
-        echo -e "chrom\tstart\tend\tfeature_id" > "$tmp"
-        cat "$tmp" {input.windows} \
-          | paste - {input.fracs} \
-          | gzip -c > {output.tsv} 2> {log}
+        {{
+          echo -e "chrom\tstart\tend\tfeature_id" > "$tmp"
+          cat "$tmp" {input.windows} \
+            | paste - {input.fracs} \
+            | gzip -c > {output.tsv}
+        }} 2> {log}
         rm -f "$tmp"
         """
 

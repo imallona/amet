@@ -67,7 +67,7 @@ source(file.path(repo_root, "workflow", "scripts", "diff_testing.R"))
 opts_chunk$set(
   fig.width = 5,
   fig.height = 5,
-  cache = TRUE,
+  cache = FALSE,
   error = TRUE,
   include = TRUE,
   fig.path = "crc_windows_plots/",

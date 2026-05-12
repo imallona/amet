@@ -29,6 +29,11 @@ categorize_drivers <- function(grp_df, group_col) {
   var_df$jsd_sd[!is.finite(var_df$jsd_sd)] <- 0
   var_df$i_total_sd[!is.finite(var_df$i_total_sd)] <- 0
 
+  if (nrow(var_df) == 0) {
+    var_df$driver <- character(0)
+    return(var_df)
+  }
+
   jsd_thr <- quantile(var_df$jsd_sd, 0.3)
   i_total_thr <- quantile(var_df$i_total_sd, 0.3)
 

@@ -317,9 +317,11 @@ rule crc_combine_window_annotations:
         mkdir -p $(dirname {output.tsv})
         tmp_header=$(mktemp)
         tmp_body=$(mktemp)
-        echo -e "chrom\tstart\tend\tfeature_id" > $tmp_header
-        cat $tmp_header {input.windows} > $tmp_body
-        paste $tmp_body {input.fracs} | gzip -c > {output.tsv} 2> {log}
+        {{
+          echo -e "chrom\tstart\tend\tfeature_id" > $tmp_header
+          cat $tmp_header {input.windows} > $tmp_body
+          paste $tmp_body {input.fracs} | gzip -c > {output.tsv}
+        }} 2> {log}
         rm -f $tmp_header $tmp_body
         """
 

@@ -85,7 +85,9 @@ amet_setup_render_logging <- function(log_path, threads = 1L) {
       message("[render_logging] sinks already active; skipping re-sink")
     } else {
       log_con <- file(log_path, open = "at")
-      sink(log_con)
+      ## split = TRUE so knitr's stdout capture still sees chunk output
+      ## (results = "asis" and cat() emit Markdown into the rendered HTML).
+      sink(log_con, split = TRUE)
       sink(log_con, type = "message")
       .amet_log_state$sink_active <- TRUE
       .amet_log_state$log_con <- log_con

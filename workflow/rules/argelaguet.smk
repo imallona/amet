@@ -293,9 +293,10 @@ rule argelaguet_window_annotation_per_annotation:
     shell:
         r"""
         mkdir -p $(dirname {output.frac})
-        echo "{wildcards.annotation}" > {output.frac}
-        bedtools coverage -a {input.windows} -b {input.annotation} \
-            2> {log} | cut -f7 >> {output.frac}
+        {{
+          echo "{wildcards.annotation}"
+          bedtools coverage -a {input.windows} -b {input.annotation} | cut -f7
+        }} > {output.frac} 2> {log}
         """
 
 
@@ -321,11 +322,13 @@ rule argelaguet_combine_window_annotations:
         mkdir -p $(dirname {output.annotation})
         tmp_header=$(mktemp)
         tmp_bed=$(mktemp)
-        printf "chrom\tstart\tend\tfeature_id\n" > $tmp_header
-        cat $tmp_header {input.windows} > $tmp_bed
-        paste $tmp_bed {input.fracs} | gzip -c > {output.annotation}
+        {{
+          printf "chrom\tstart\tend\tfeature_id\n" > $tmp_header
+          cat $tmp_header {input.windows} > $tmp_bed
+          paste $tmp_bed {input.fracs} | gzip -c > {output.annotation}
+          echo "[combine] wrote $(zcat {output.annotation} | wc -l) rows"
+        }} > {log} 2>&1
         rm -f $tmp_header $tmp_bed
-        echo "[combine] wrote $(zcat {output.annotation} | wc -l) rows" > {log}
         """
 
 

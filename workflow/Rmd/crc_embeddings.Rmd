@@ -61,7 +61,7 @@ knitr::opts_chunk$set(
   echo = TRUE,
   fig.width = ng_fig_size(1, 1)$w,
   fig.height = ng_fig_size(1, 1)$h,
-  cache = TRUE,
+  cache = FALSE,
   error = TRUE,
   include = TRUE,
   fig.path = "crc_embeddings_plots/",

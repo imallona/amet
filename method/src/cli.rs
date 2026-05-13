@@ -66,6 +66,11 @@ pub struct Cli {
     #[arg(long, default_value_t = 3)]
     pub i_max_lag: u32,
 
+    /// Maximum nucleotide distance allowed between paired CpGs. Pairs whose genomic
+    /// distance exceeds this value are not counted. 0 disables the cap.
+    #[arg(long, default_value_t = 0)]
+    pub max_pair_distance: u64,
+
     /// Number of threads. 0 means all available.
     #[arg(long, default_value_t = 0)]
     pub threads: usize,

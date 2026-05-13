@@ -145,6 +145,7 @@ If you are in the Mark Robinson lab at UZH, `workflow/scripts/internal/setup_bar
 | `--min-cpgs-per-feature` | `5` | A `(cell, feature)` is scored only if at least this many CpGs are covered. Below the threshold, scores are reported as `NA`. |
 | `--min-cells-per-group` | `10` | A `(feature, group)` reports `jsd` only if at least this many cells pass the per-cell coverage filter. Otherwise `jsd` is `NA`. |
 | `--i-max-lag` | `3` | Maximum CpG lag k for `I_total = sum_{k=1..max} I_k`. |
+| `--max-pair-distance` | `0` (off) | Maximum nucleotide distance allowed between two CpGs of a pair. Pairs whose genomic distance exceeds this value are not counted, at any lag. `0` disables the cap. |
 | `--threads` | `0` (all) | Number of threads. |
 
 ### Manifest (`--cells`)

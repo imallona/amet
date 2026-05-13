@@ -10,9 +10,53 @@ params:
   win_cell_feature: ""
   win_feature: ""
   win_bed: ""
+  windows_annotation: ""
   manifest: ""
   out_dir: ""
+  log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
+
+```{r logging_early, include = FALSE}
+source(Sys.getenv("AMET_RENDER_HELPERS"))
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
+
+```{r load_window_annotation}
+suppressPackageStartupMessages({
+  library(data.table)
+})
+data.table::setDTthreads(params$threads)
+
+ann_mat <- NULL
+ann_bin <- NULL
+ann_cols <- character(0)
+ann_path <- params$windows_annotation
+if (is.character(ann_path) && nzchar(ann_path) && file.exists(ann_path)) {
+  ann_tbl <- tryCatch(
+    fread(ann_path, sep = "\t", header = TRUE, nThread = params$threads),
+    error = function(e) {
+      message("[fig_ecker] failed to read windows_annotation: ", conditionMessage(e))
+      NULL
+    })
+  if (!is.null(ann_tbl) && nrow(ann_tbl) > 0L &&
+      "feature_id" %in% colnames(ann_tbl)) {
+    keep <- setdiff(colnames(ann_tbl), c("chrom", "start", "end", "feature_id"))
+    if (length(keep) > 0L) {
+      ann_mat <- as.data.frame(ann_tbl[, c("feature_id", keep), with = FALSE])
+      rownames(ann_mat) <- ann_mat$feature_id
+      ann_cols <- keep
+      ann_bin <- as.data.frame(lapply(ann_mat[, ann_cols, drop = FALSE],
+                                      function(x) as.integer(x > 0)))
+      colnames(ann_bin) <- paste0(ann_cols, "_bin")
+      rownames(ann_bin) <- ann_mat$feature_id
+    }
+  }
+}
+cat("Annotation columns:", length(ann_cols),
+    "| windows annotated:", if (is.null(ann_mat)) 0L else nrow(ann_mat), "\n")
+```
 
 ```{r setup}
 suppressPackageStartupMessages({
@@ -34,7 +78,7 @@ source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 source(file.path(repo_root, "workflow", "scripts", "driver_utils.R"))
 
 knitr::opts_chunk$set(
-  echo    = TRUE,
+  echo = TRUE,
   message = FALSE,
   warning = FALSE
 )
@@ -44,14 +88,14 @@ if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 ```
 
 ```{r load}
-meta         <- readRDS("ecker_groups_meta.rds")
-ent          <- readRDS("ecker_entropy.rds")
-win_umap     <- readRDS("ecker_umap_windows_i_total.rds")
+meta <- readRDS("ecker_groups_meta.rds")
+ent <- readRDS("ecker_entropy.rds")
+win_umap <- readRDS("ecker_umap_windows_i_total.rds")
 
 ve_long <- if (file.exists("ecker_win_varexp.csv"))
              read.csv("ecker_win_varexp.csv", stringsAsFactors = FALSE) else NULL
-cell_df <- if (file.exists("ecker_per_cell_summary.csv"))
-             read.csv("ecker_per_cell_summary.csv", stringsAsFactors = FALSE) else NULL
+cell_df <- if (file.exists("ecker_embeddings_per_cell_summary.csv"))
+             read.csv("ecker_embeddings_per_cell_summary.csv", stringsAsFactors = FALSE) else NULL
 ```
 
 ```{r embedding_diagnostics_report}
@@ -66,7 +110,7 @@ if (!is.null(ve_long)) {
 }
 ```
 
-<!-- Section dropped: paper UMAP overlay (paper-umap-data, fe-panel-b-v2) is not reproduced. amet's manifest does not carry the Ecker paper L1UMAP coordinates, so umap_cells cannot be reconstructed from ecker_paper_umap_overlay.rds. -->
+<!-- Paper UMAP overlay omitted: manifest lacks paper L1UMAP coords. -->
 
 # Half-A4 compact figure (primary)
 
@@ -81,13 +125,13 @@ G) driver categorization (SD jsd vs SD i_total across cell classes).
 ```{r fe-panel-a-v2}
 schema_classes <- c("Exc", "Inh", "NonN")
 schema_layout <- list(
-  Exc  = c("CT-L6", "IT-L23", "PT-L5"),
-  Inh  = c("MGE-Sst", "CGE-Vip"),
+  Exc = c("CT-L6", "IT-L23", "PT-L5"),
+  Inh = c("MGE-Sst", "CGE-Vip"),
   NonN = c("ASC", "OPC")
 )
 schema_classes <- intersect(schema_classes, names(ecker_cell_class_pal))
-schema_layout  <- schema_layout[schema_classes]
-schema_layout  <- lapply(seq_along(schema_layout), function(i) {
+schema_layout <- schema_layout[schema_classes]
+schema_layout <- lapply(seq_along(schema_layout), function(i) {
   cls <- schema_classes[i]
   mts <- intersect(schema_layout[[i]], names(ecker_major_type_pal))
   if (length(mts) == 0) {
@@ -99,9 +143,9 @@ schema_layout  <- lapply(seq_along(schema_layout), function(i) {
   data.frame(cell_class = cls, major_type = mts, stringsAsFactors = FALSE)
 })
 schema_cells <- do.call(rbind, schema_layout)
-schema_cells$col       <- seq_len(nrow(schema_cells))
+schema_cells$col <- seq_len(nrow(schema_cells))
 schema_cells$cls_color <- ecker_cell_class_pal[schema_cells$cell_class]
-schema_cells$mt_color  <- ecker_major_type_pal[schema_cells$major_type]
+schema_cells$mt_color <- ecker_major_type_pal[schema_cells$major_type]
 
 schema_regions <- c("windows", "CpG isl.", "HMM", "marks")
 n_schema_regions <- length(schema_regions)
@@ -112,7 +156,7 @@ schema_grid <- expand.grid(col = seq_len(n_schema_cols),
                            row = seq_len(n_schema_regions))
 schema_grid$val <- runif(nrow(schema_grid), 0.1, 0.95)
 
-bar_mt  <- n_schema_regions + 0.9
+bar_mt <- n_schema_regions + 0.9
 bar_cls <- n_schema_regions + 1.55
 ellipsis_y <- 0
 cls_centers <- tapply(schema_cells$col, schema_cells$cell_class, mean)
@@ -178,10 +222,10 @@ pA_v2 <- ggplot() +
 mk_our_umap <- function(em, label) {
   if (is.null(em)) return(NULL)
   df <- data.frame(
-    UMAP1      = em$umap[, 1],
-    UMAP2      = em$umap[, 2],
+    UMAP1 = em$umap[, 1],
+    UMAP2 = em$umap[, 2],
     cell_class = win_umap$col_data$cell_class[em$kept_cols],
-    assay      = label,
+    assay = label,
     stringsAsFactors = FALSE
   )
   ggplot(df, aes(UMAP1, UMAP2, color = cell_class)) +
@@ -192,20 +236,20 @@ mk_our_umap <- function(em, label) {
     labs(x = "UMAP 1", y = "UMAP 2", color = "cell class",
          subtitle = paste0("ours: ", label)) +
     theme_ng(base_size = 7) +
-    theme(plot.subtitle      = element_text(size = 6.5, hjust = 0.5,
+    theme(plot.subtitle = element_text(size = 6.5, hjust = 0.5,
                                              margin = margin(0, 0, 1, 0)),
-          legend.position    = "bottom",
-          legend.key.size    = unit(1.2, "mm"),
-          legend.text        = element_text(size = 5.5),
-          legend.title       = element_text(size = 6.5),
-          legend.margin      = margin(0, 0, 0, 0),
-          legend.box.margin  = margin(-6, 0, -2, 0),
+          legend.position = "bottom",
+          legend.key.size = unit(1.2, "mm"),
+          legend.text = element_text(size = 5.5),
+          legend.title = element_text(size = 6.5),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(-6, 0, -2, 0),
           legend.box.spacing = unit(0.2, "mm"),
-          plot.margin        = margin(0, 1, 0, 1, "mm"))
+          plot.margin = margin(0, 1, 0, 1, "mm"))
 }
 
 p_c_itotal <- mk_our_umap(win_umap$win_embeds$i_total,     "i_total")
-p_c_meth   <- mk_our_umap(win_umap$win_embeds$methylation, "meth.")
+p_c_meth <- mk_our_umap(win_umap$win_embeds$methylation, "meth.")
 pC_v2 <- wrap_elements(full = (p_c_itotal + p_c_meth) +
                                 plot_layout(guides = "collect") &
                               theme(legend.position = "bottom"))
@@ -215,16 +259,16 @@ pC_v2 <- wrap_elements(full = (p_c_itotal + p_c_meth) +
 grp <- meta$all_grp_meta
 
 ht_wide <- grp %>%
-  select(sub_type, annotation, cell_class, major_type, median_adjS) %>%
+  select(sub_type, annotation, cell_class, major_type, median_i_total) %>%
   group_by(sub_type, annotation, cell_class, major_type) %>%
-  summarise(median_adjS = median(median_adjS, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(names_from = annotation, values_from = median_adjS)
+  summarise(median_i_total = median(median_i_total, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = annotation, values_from = median_i_total)
 
 mat <- ht_wide %>% select(-sub_type, -cell_class, -major_type) %>% as.matrix()
 rownames(mat) <- ht_wide$sub_type
 
 cc_ht_pal <- ecker_cell_class_pal[sort(unique(ht_wide$cell_class))]
-mt_pal    <- ecker_major_type_pal[sort(unique(ht_wide$major_type))]
+mt_pal <- ecker_major_type_pal[sort(unique(ht_wide$major_type))]
 
 brk <- c(min(mat, na.rm = TRUE),
          mean(range(mat, na.rm = TRUE)),
@@ -235,32 +279,32 @@ col_fun_d <- colorRamp2(brk, c("navy", "white", "firebrick"))
 ```{r fe-panel-d-v2}
 ht_compact <- Heatmap(
   mat,
-  name              = "median\ni_total",
-  col               = col_fun_d,
-  row_split         = ht_wide$cell_class,
-  cluster_rows      = TRUE,
+  name = "median\ni_total",
+  col = col_fun_d,
+  row_split = ht_wide$cell_class,
+  cluster_rows = TRUE,
   cluster_row_slices = FALSE,
-  cluster_columns   = TRUE,
-  show_row_names    = FALSE,
+  cluster_columns = TRUE,
+  show_row_names = FALSE,
   show_column_names = TRUE,
-  row_names_gp      = gpar(fontsize = 4),
-  column_names_gp   = gpar(fontsize = 5),
-  row_title_gp      = gpar(fontsize = 6),
-  row_title_rot     = 0,
-  row_gap           = unit(0.6, "mm"),
-  right_annotation  = rowAnnotation(
+  row_names_gp = gpar(fontsize = 4),
+  column_names_gp = gpar(fontsize = 5),
+  row_title_gp = gpar(fontsize = 6),
+  row_title_rot = 0,
+  row_gap = unit(0.6, "mm"),
+  right_annotation = rowAnnotation(
     cell_class = ht_wide$cell_class,
     major_type = ht_wide$major_type,
-    col        = list(cell_class = cc_ht_pal, major_type = mt_pal),
+    col = list(cell_class = cc_ht_pal, major_type = mt_pal),
     simple_anno_size = unit(1.8, "mm"),
     annotation_name_gp = gpar(fontsize = 5),
     show_legend = FALSE
   ),
   heatmap_legend_param = list(
-    title_gp    = gpar(fontsize = 6),
-    labels_gp   = gpar(fontsize = 5),
+    title_gp = gpar(fontsize = 6),
+    labels_gp = gpar(fontsize = 5),
     grid_height = unit(2, "mm"),
-    grid_width  = unit(2, "mm")
+    grid_width = unit(2, "mm")
   )
 )
 
@@ -283,21 +327,21 @@ if (!is.null(cell_df)) {
     guides(color = guide_legend(override.aes = list(size = 1.5, alpha = 1),
                                 nrow = 1)) +
     theme_ng(base_size = 7) +
-    theme(legend.position    = "bottom",
-          legend.key.size    = unit(1.2, "mm"),
-          legend.text        = element_text(size = 6),
-          legend.title       = element_text(size = 7),
-          legend.margin      = margin(0, 0, 0, 0),
-          legend.box.margin  = margin(-6, 0, -2, 0),
+    theme(legend.position = "bottom",
+          legend.key.size = unit(1.2, "mm"),
+          legend.text = element_text(size = 6),
+          legend.title = element_text(size = 7),
+          legend.margin = margin(0, 0, 0, 0),
+          legend.box.margin = margin(-6, 0, -2, 0),
           legend.box.spacing = unit(0.2, "mm"),
-          strip.text         = element_text(size = 5.5,
+          strip.text = element_text(size = 5.5,
                                             margin = margin(1, 0, 1, 0)),
-          panel.spacing.x    = unit(1.2, "mm"),
-          panel.spacing.y    = unit(0.6, "mm"),
-          plot.margin        = margin(0, 0, 0, 0, "mm"))
+          panel.spacing.x = unit(1.2, "mm"),
+          panel.spacing.y = unit(0.6, "mm"),
+          plot.margin = margin(0, 0, 0, 0, "mm"))
 } else {
   pE_v2 <- patchwork::plot_spacer() +
-    labs(title = "ecker_per_cell_summary.csv missing")
+    labs(title = "ecker_embeddings_per_cell_summary.csv missing")
 }
 ```
 
@@ -314,14 +358,14 @@ if (!is.null(ve_long)) {
                                  "sub_type"   = "#E69F00")) +
     labs(x = "assay", y = "median % var. explained", fill = NULL) +
     theme_ng(base_size = 7) +
-    theme(legend.position      = "top",
+    theme(legend.position = "top",
           legend.justification = "left",
-          legend.background    = element_rect(fill = "white", colour = NA),
-          legend.key.size      = unit(1.8, "mm"),
-          legend.text          = element_text(size = 6),
-          legend.margin        = margin(0, 1, 0, 1),
-          legend.box.margin    = margin(0, 0, -2, 0),
-          plot.margin          = margin(1, 0, 0, 0, "mm"))
+          legend.background = element_rect(fill = "white", colour = NA),
+          legend.key.size = unit(1.8, "mm"),
+          legend.text = element_text(size = 6),
+          legend.margin = margin(0, 1, 0, 1),
+          legend.box.margin = margin(0, 0, -2, 0),
+          plot.margin = margin(1, 0, 0, 0, "mm"))
 } else {
   pF_v2 <- patchwork::plot_spacer() +
     labs(title = "ecker_win_varexp.csv missing")
@@ -333,7 +377,7 @@ if (!is.null(ve_long)) {
 ## sub_types from one cell_class) it can collapse to one.
 safe_r2 <- function(d) {
   if (length(unique(stats::na.omit(d$cell_class))) < 2) return(NA_real_)
-  summary(lm(median_adjS ~ cell_class, data = d))$r.squared
+  summary(lm(median_i_total ~ cell_class, data = d))$r.squared
 }
 r2_by_ann <- grp %>%
   group_by(annotation) %>%
@@ -365,14 +409,14 @@ pH_v2 <- plot_driver_scatter(driver_df_ecker,
   guides(color = guide_legend(nrow = 1, title.position = "left"),
          shape = guide_legend(nrow = 1, title.position = "left")) +
   theme_ng(base_size = 7) +
-  theme(legend.position    = "bottom",
-        legend.key.size    = unit(1.2, "mm"),
-        legend.text        = element_text(size = 5.5),
-        legend.title       = element_text(size = 6.5),
-        legend.margin      = margin(0, 0, 0, 0),
-        legend.box.margin  = margin(-6, 0, -2, 0),
+  theme(legend.position = "bottom",
+        legend.key.size = unit(1.2, "mm"),
+        legend.text = element_text(size = 5.5),
+        legend.title = element_text(size = 6.5),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(-6, 0, -2, 0),
         legend.box.spacing = unit(0.2, "mm"),
-        plot.margin        = margin(0, 0, 0, 0, "mm"))
+        plot.margin = margin(0, 0, 0, 0, "mm"))
 
 pH_v2$layers[[which(sapply(pH_v2$layers, function(l)
   inherits(l$geom, "GeomTextRepel")))]] <- NULL
@@ -393,19 +437,19 @@ compact_fig <- row1_v2 / row2_v2 / row3_v2 +
   plot_layout(heights = c(2.0, 1.82, 1)) +
   plot_annotation(tag_levels = "A",
                   theme = theme(
-                    plot.tag          = element_text(size = 9, face = "bold"),
+                    plot.tag = element_text(size = 9, face = "bold"),
                     plot.tag.position = c(0.01, 0.99),
-                    plot.margin       = margin(1, 1, 1, 1, "mm")
+                    plot.margin = margin(1, 1, 1, 1, "mm")
                   ))
 
 print(compact_fig)
 
 ggsave(
   file.path(out_dir, "fig_ecker_half_a4.pdf"),
-  plot   = compact_fig,
-  width  = 8.27,
+  plot = compact_fig,
+  width = 8.27,
   height = 9.5,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```
@@ -418,20 +462,20 @@ file below renders the same matrix at a larger size for supplementary use.
 ```{r fe-heatmap-standalone, fig.width = 10, fig.height = 10}
 ht_full <- Heatmap(
   mat,
-  name              = "median i_total",
-  col               = col_fun_d,
-  row_split         = ht_wide$cell_class,
-  cluster_rows      = TRUE,
+  name = "median i_total",
+  col = col_fun_d,
+  row_split = ht_wide$cell_class,
+  cluster_rows = TRUE,
   cluster_row_slices = FALSE,
-  cluster_columns   = FALSE,
-  show_row_names    = TRUE,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
   show_column_names = TRUE,
-  row_names_gp      = gpar(fontsize = 6),
-  column_names_gp   = gpar(fontsize = 7),
-  right_annotation  = rowAnnotation(
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 7),
+  right_annotation = rowAnnotation(
     cell_class = ht_wide$cell_class,
     major_type = ht_wide$major_type,
-    col        = list(cell_class = cc_ht_pal, major_type = mt_pal),
+    col = list(cell_class = cc_ht_pal, major_type = mt_pal),
     annotation_legend_param = list(
       cell_class = list(title = "cell class"),
       major_type = list(title = "major type", ncol = 2)
@@ -446,14 +490,41 @@ draw(ht_full)
 invisible(dev.off())
 ```
 
-<!-- Note: legacy paper-UMAP overlay panels (pa-pd: cell_class, adjS, adjH, meth) are dropped because amet does not provide paper UMAP coords. The remaining pe-ph (IQR, R^2, windows UMAP, drivers) are kept below. -->
+# Annotation coverage overview
+
+Quick sanity check of the per-window annotation matrix carried into the
+windows analyses. Skipped when the matrix is empty.
+
+```{r ann_coverage_summary, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(2, 1)$h}
+if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
+  cat("No annotation matrix; skipping coverage overview.\n")
+} else {
+  ann_summary <- data.frame(
+    annotation = sub("_bin$", "", colnames(ann_bin)),
+    fraction_windows = vapply(ann_bin,
+                              function(x) mean(x == 1L, na.rm = TRUE),
+                              numeric(1))
+  )
+  write.csv(ann_summary, "ecker_window_annotation_coverage.csv",
+            row.names = FALSE)
+  ggplot(ann_summary,
+         aes(x = reorder(annotation, fraction_windows),
+             y = fraction_windows)) +
+    geom_col(fill = "#0072B2") +
+    coord_flip() +
+    labs(x = NULL, y = "fraction of windows overlapping annotation") +
+    theme_ng(base_size = 8)
+}
+```
+
+<!-- Paper UMAP panels (pa-pd) omitted: no paper UMAP coords. Panels pe-ph kept below. -->
 
 # Legacy panels (kept for reference)
 
 ```{r fe-legacy-panels, fig.width = ng_fig_size(4, 2, panel_mm = 45)$w, fig.height = ng_fig_size(4, 2, panel_mm = 45)$h}
-var_class <- ent$adjsampens %>%
+var_class <- ent$i_total_long %>%
   group_by(cell_class) %>%
-  summarise(iqr = IQR(sampen, na.rm = TRUE), .groups = "drop") %>%
+  summarise(iqr = IQR(i_total, na.rm = TRUE), .groups = "drop") %>%
   arrange(desc(iqr)) %>%
   mutate(cell_class = factor(cell_class, levels = cell_class))
 write.csv(var_class, "ecker_fig_i_total_iqr_by_cell_class.csv", row.names = FALSE)
@@ -476,14 +547,14 @@ ph <- plot_driver_scatter(driver_df_ecker,
                           y_label = expression("SD " * i[total] * " across cell classes")) +
   theme_ng(base_size = 8) +
   theme(legend.key.size = unit(2, "mm"),
-        legend.text     = element_text(size = 6),
-        legend.title    = element_text(size = 7))
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 7))
 
 em_itotal_legacy <- win_umap$win_embeds[["i_total"]]
 if (!is.null(em_itotal_legacy)) {
   wins_df <- data.frame(
-    umap1      = em_itotal_legacy$umap[, 1],
-    umap2      = em_itotal_legacy$umap[, 2],
+    umap1 = em_itotal_legacy$umap[, 1],
+    umap2 = em_itotal_legacy$umap[, 2],
     cell_class = win_umap$col_data$cell_class[em_itotal_legacy$kept_cols]
   )
   pg <- ggplot(wins_df, aes(x = umap1, y = umap2, color = cell_class)) +
@@ -507,10 +578,10 @@ print(gg_fig)
 
 ggsave(
   file.path(out_dir, "fig_ecker_panels.pdf"),
-  plot   = gg_fig,
-  width  = ng_fig_size(4, 2, panel_mm = 45)$w,
+  plot = gg_fig,
+  width = ng_fig_size(4, 2, panel_mm = 45)$w,
   height = ng_fig_size(4, 2, panel_mm = 45)$h,
-  units  = "in",
+  units = "in",
   device = cairo_pdf
 )
 ```

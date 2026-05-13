@@ -17,7 +17,16 @@ params:
   win_bed: ""
   manifest: ""
   out_dir: ""
+  windows_annotation: ""
+  log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
+
+```{r logging_early, include = FALSE}
+source(Sys.getenv("AMET_RENDER_HELPERS"))
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
 
 ```{r, setup}
 suppressPackageStartupMessages({
@@ -52,14 +61,13 @@ source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 source(file.path(repo_root, "workflow", "scripts", "driver_utils.R"))
 source(file.path(repo_root, "workflow", "scripts", "diff_testing.R"))
 
-param <- SerialParam()
 ```
 
 ```{r}
 opts_chunk$set(
   fig.width = 5,
   fig.height = 5,
-  cache = TRUE,
+  cache = FALSE,
   error = TRUE,
   include = TRUE,
   fig.path = "crc_windows_plots/",
@@ -69,33 +77,71 @@ opts_chunk$set(
   message = TRUE
 )
 
-## render on error hook
-knitr::knit_hooks$set(error = function(x, options) {
-  knitr::knit_exit()
-})
 ```
 
 
 # QC: tile annotations  {.tabset .tabset-pills}
 
-To double check annotations are ok. amet's window BED has only feature_id (no per-window genomic-feature columns), so this section is skipped.
+The per-window annotation matrix is built upstream by `crc_combine_window_annotations`:
+one column per (subcat, cat) pair holding the fraction of window bases covered by
+the annotation BED. Empty path or read error degrades gracefully to an empty
+matrix so downstream chunks can skip.
 
 ```{r, fig.width = 8, fig.height = 5}
-## amet's win_bed is just (chrom, start, end, feature_id) with no per-window
-## annotation matrix. Show the bed shape for sanity.
 win_bed <- fread(params$win_bed, header = FALSE,
                  col.names = c("chrom", "start", "end", "feature_id"))
 cat("windows BED:", nrow(win_bed), "rows\n")
 print(head(win_bed))
+
+load_window_annotation <- function(path, win_bed) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) {
+    return(data.frame(row.names = sprintf(
+      "%s:%s-%s", win_bed$chrom, win_bed$start, win_bed$end)))
+  }
+  tab <- tryCatch(
+    as.data.frame(fread(path, header = TRUE, sep = "\t")),
+    error = function(e) {
+      message("annotation read failed: ", conditionMessage(e))
+      NULL
+    })
+  if (is.null(tab) || nrow(tab) == 0) {
+    return(data.frame(row.names = sprintf(
+      "%s:%s-%s", win_bed$chrom, win_bed$start, win_bed$end)))
+  }
+  tab$region <- sprintf("%s:%s-%s", tab$chrom, tab$start, tab$end)
+  rownames(tab) <- tab$region
+  drop_cols <- c("chrom", "start", "end", "feature_id", "region")
+  tab[, setdiff(colnames(tab), drop_cols), drop = FALSE]
+}
+
+annot <- load_window_annotation(params$windows_annotation, win_bed)
+cat("annotation columns:", ncol(annot),
+    "| rows:", nrow(annot), "\n")
+if (ncol(annot) > 0 && nrow(annot) > 0) {
+  hc_sample <- head(annot, 5e4)
+  hc_sample <- hc_sample[, sapply(hc_sample, function(x)
+    is.numeric(x) && sum(!is.na(x)) > 0), drop = FALSE]
+  if (ncol(hc_sample) >= 2)
+    try(plot(hclust(dist(t(hc_sample))),
+             main = "annotation columns dendrogram"),
+        silent = TRUE)
+}
 ```
 
-```{r read_shannons}
+## Cell selection upstream of this Rmd:
+##   Per (patient, location) stratum, cells are picked by singleC.txt.gz
+##   size on disk (proxy for observed-CpG coverage). CRC has no per-cell
+##   plate metadata in the GEO filenames, so picks are plain top-N. Cap =
+##   max_cells_per_combo (config/datasets.yaml: prototype.cells_per_group
+##   in proto, full.max_cells_per_combo otherwise).
+
+```{r read_jsd_long}
 ## amet exports per-feature jsd (feature.tsv.gz) and per-cell-per-feature
-## i_total (cell_feature.tsv.gz). Build a long `shannons` data.frame plus a
-## per-(patient, location) `sampens_list` of sparse matrices keyed by
+## i_total (cell_feature.tsv.gz). Build a long `jsd_long` data.frame plus a
+## per-(patient, location) `i_total_list` of sparse matrices keyed by
 ## region = "<chr>:<start>-<end>".
 
-get_patient  <- function(fn) sub("^([^_]+)_[^_]+\\..*$", "\\1", fn)
+get_patient <- function(fn) sub("^([^_]+)_[^_]+\\..*$", "\\1", fn)
 get_location <- function(fn) sub("^[^_]+_([^_.]+)\\..*$", "\\1", fn)
 
 cf_files <- list.files(params$windows_dir,
@@ -114,7 +160,7 @@ regex_combo <- "([^_]+)_([^_.]+)\\..*$"
 
 process_reports <- function(cf_fp) {
   fn <- basename(cf_fp)
-  patient  <- sub(regex_combo, "\\1", fn)
+  patient <- sub(regex_combo, "\\1", fn)
   location <- sub(regex_combo, "\\2", fn)
 
   fe_fp <- file.path(dirname(cf_fp),
@@ -129,11 +175,11 @@ process_reports <- function(cf_fp) {
     fe[, region := fid2region[feature_id]]
     fe <- fe[!is.na(region)]
     dtm <- data.frame(
-      shannon  = fe$jsd,
+      jsd = fe$jsd,
       avg_meth = fe$mean_meth_mean,
-      patient  = patient,
+      patient = patient,
       location = location,
-      window   = fe$region,
+      window = fe$region,
       stringsAsFactors = FALSE
     )
   } else {
@@ -153,12 +199,12 @@ process_reports <- function(cf_fp) {
                      dimnames = list(rows, cols))
 
   list(
-    shannon = dtm,
-    sampen = list(
+    jsd = dtm,
+    i_total = list(
       file = cf_fp,
       patient = patient,
       location = location,
-      sampen = se,
+      i_total = se,
       meth = ms
     )
   )
@@ -168,14 +214,14 @@ process_reports <- function(cf_fp) {
 ```{r}
 all_reports <- bplapply(cf_files, process_reports, BPPARAM = param)
 
-shannons <- do.call(rbind, lapply(all_reports, \(x) x$shannon))
-shannons$patient  <- as.factor(shannons$patient)
-shannons$location <- factor(shannons$location,
+jsd_long <- do.call(rbind, lapply(all_reports, \(x) x$jsd))
+jsd_long$patient <- as.factor(jsd_long$patient)
+jsd_long$location <- factor(jsd_long$location,
                             levels = c("NC","PT","LN","ML","MP","MO"))
-rownames(shannons) <- paste(shannons$patient, shannons$location,
-                            seq_len(nrow(shannons)), sep = "_")
+rownames(jsd_long) <- paste(jsd_long$patient, jsd_long$location,
+                            seq_len(nrow(jsd_long)), sep = "_")
 
-sampens_list <- lapply(all_reports, \(x) x$sampen)
+i_total_list <- lapply(all_reports, \(x) x$i_total)
 ```
 
 
@@ -183,15 +229,15 @@ sampens_list <- lapply(all_reports, \(x) x$sampen)
 
 ```{r}
 flatten_entry <- function(entry, filter) {
-  mat <- as.matrix(entry$sampen)
+  mat <- as.matrix(entry$i_total)
   df <- as.data.frame(t(mat))
-  df$cell <- colnames(entry$sampen)
+  df$cell <- colnames(entry$i_total)
   df$patient <- entry$patient
   df$location <- entry$location
   df
 }
 
-df_all <- map_dfr(sampens_list, flatten_entry)
+df_all <- map_dfr(i_total_list, flatten_entry)
 
 features <- df_all %>% select(starts_with("chr"))
 
@@ -245,12 +291,12 @@ And this is with all features; what would it happen if focusing in changing wind
 ```{r}
 cell_summary <- features %>%
   as.data.frame() %>%
-  mutate(mean_sampen = rowMeans(., na.rm = TRUE),
-         var_sampen  = apply(., 1, var, na.rm = TRUE)) %>%
-  select(mean_sampen, var_sampen) %>%
+  mutate(mean_i_total = rowMeans(., na.rm = TRUE),
+         var_i_total = apply(., 1, var, na.rm = TRUE)) %>%
+  select(mean_i_total, var_i_total) %>%
   bind_cols(df_all_filtered %>% select(cell, patient, location))
 
-ggplot(cell_summary, aes(x = location, y = mean_sampen, fill = location)) +
+ggplot(cell_summary, aes(x = location, y = mean_i_total, fill = location)) +
   geom_violin(trim = FALSE, scale = "width") +
   geom_boxplot(width = 0.1, outlier.size = 0.5, alpha = 0.5) +
   facet_wrap(~patient) +
@@ -262,7 +308,7 @@ ggplot(cell_summary, aes(x = location, y = mean_sampen, fill = location)) +
 ### Var i_total
 
 ```{r}
-ggplot(cell_summary, aes(x = location, y = var_sampen, fill = location)) +
+ggplot(cell_summary, aes(x = location, y = var_i_total, fill = location)) +
   geom_violin(trim = FALSE, scale = "width") +
   geom_boxplot(width = 0.1, outlier.size = 0.5, alpha = 0.5) +
   facet_wrap(~patient) +
@@ -278,20 +324,24 @@ Export a SCE with NA filtering.
 
 ```{r}
 
-assay_list <- list(sampen = t(as.matrix(features)))
+assay_list <- list(i_total = t(as.matrix(features)))
 
 # Add summary stats
 df_all_filtered <- df_all_filtered |>
    mutate(
-       mean_sampen = rowMeans(features, na.rm = TRUE),
-       var_sampen  = apply(features, 1, var, na.rm = TRUE))
+       mean_i_total = rowMeans(features, na.rm = TRUE),
+       var_i_total = apply(features, 1, var, na.rm = TRUE))
 
-col_data <- data.frame(df_all_filtered[,c('cell', 'patient', 'location', 'mean_sampen', 'var_sampen')])
-## amet's window BED has only (chrom, start, end, feature_id), no per-window
-## genomic feature annotation. Build a placeholder rowData with the region
-## coordinates so the SCE constructor accepts it.
+col_data <- data.frame(df_all_filtered[,c('cell', 'patient', 'location', 'mean_i_total', 'var_i_total')])
+## rowData carries per-window annotation overlap fractions when available;
+## otherwise just the region id so the SCE constructor accepts it.
 row_data <- data.frame(region = colnames(features),
                        row.names = colnames(features))
+if (ncol(annot) > 0) {
+  row_data <- cbind(row_data,
+                    annot[match(rownames(row_data), rownames(annot)), ,
+                          drop = FALSE])
+}
 
 windows_sce <- SingleCellExperiment(
   assays = assay_list,
@@ -301,25 +351,30 @@ windows_sce <- SingleCellExperiment(
 
 # add assay with DNA meth as well; amet's cell_feature.tsv.gz already carries
 # mean_meth per (cell, window) so we transpose the per-combo matrices, glue
-# them along the cell axis, and align rows/cols with the existing sampen assay.
-meth_mats <- lapply(sampens_list, function(x) x$meth)
-meth_mat  <- do.call(cbind, meth_mats)
+# them along the cell axis, and align rows/cols with the existing i_total assay.
+meth_mats <- lapply(i_total_list, function(x) x$meth)
+meth_mat <- do.call(cbind, meth_mats)
 rm(meth_mats)
 
-meth_mat <- meth_mat[rownames(windows_sce), colnames(assay(windows_sce, "sampen"))]
+meth_mat <- meth_mat[rownames(windows_sce), colnames(assay(windows_sce, "i_total"))]
 
 stopifnot(
-  identical(rownames(assay(windows_sce, "sampen")), rownames(meth_mat)),
-  identical(colnames(assay(windows_sce, "sampen")), colnames(meth_mat)))
+  identical(rownames(assay(windows_sce, "i_total")), rownames(meth_mat)),
+  identical(colnames(assay(windows_sce, "i_total")), colnames(meth_mat)))
 
 assay(windows_sce, "meth") <- meth_mat
 
 rm(meth_mat)
+```
 
+```{r save_sce_windows, cache = FALSE, error = FALSE}
+stopifnot(exists("windows_sce"))
 sce_path <- file.path(params$out_dir, "sce_windows_colon.rds")
 dir.create(dirname(sce_path), showWarnings = FALSE, recursive = TRUE)
 saveRDS(windows_sce, file = sce_path)
-saveRDS(windows_sce, file = "sce_windows_colon.rds")
+message("save_sce_windows: wrote ", sce_path, " (",
+        file.size(sce_path), " bytes, dim ",
+        paste(dim(windows_sce), collapse = "x"), ")")
 ```
 
 # QC  {.tabset .tabset-pills}
@@ -327,25 +382,38 @@ saveRDS(windows_sce, file = "sce_windows_colon.rds")
 Back to the SCE-free plotting/reports
 
 ```{r}
-sampens_list <- bplapply(sampens_list, \(x) {
+i_total_list <- bplapply(i_total_list, \(x) {
   x$median <- apply(
-    x$sampen, 1, function(x) median(x, na.rm = TRUE)
+    x$i_total, 1, function(x) median(x, na.rm = TRUE)
   )
   x$range <- suppressWarnings(
-    apply(x$sampen, 1, function(x) max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+    apply(x$i_total, 1, function(x) max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
   )
   x
 }, BPPARAM = param)
 ```
 
 
+```{r jsd_panel_helpers}
+## Cap each per-panel scatter at PANEL_MAX rows to keep SVG output bounded.
+## jsd_long is per-(window, patient, location) and easily has millions of rows
+## genome-wide; the visual purpose is the point cloud, so a random subset is
+## faithful.
+PANEL_MAX <- 50000L
+panel_subsample <- function(df) {
+  if (nrow(df) <= PANEL_MAX) return(df)
+  df[sample.int(nrow(df), PANEL_MAX), ]
+}
+```
+
 ## By location - jsd
 
 ```{r, fig.width = 10, fig.height = 10}
 par(mfrow = c(3, 2), pty = "s")
-for (loc in levels(shannons$location)) {
-  tmp <- shannons[shannons$location == loc, ]
-  plot(shannon ~ avg_meth, col = as.numeric(as.factor(tmp$location)), pch = ".", data = tmp, main = loc)
+for (loc in levels(jsd_long$location)) {
+  tmp <- panel_subsample(jsd_long[jsd_long$location == loc, ])
+  if (nrow(tmp) == 0) next
+  plot(jsd ~ avg_meth, col = as.numeric(as.factor(tmp$location)), pch = ".", data = tmp, main = loc)
 }
 ```
 
@@ -354,9 +422,10 @@ for (loc in levels(shannons$location)) {
 
 ```{r, fig.width = 10, fig.height = 10}
 par(mfrow = c(3, 3), pty = "s")
-for (patient in levels(shannons$patient)) {
-  tmp <- shannons[shannons$patient == patient, ]
-  plot(shannon ~ avg_meth, col = as.numeric(as.factor(tmp$location)), pch = ".", data = tmp, main = patient[1])
+for (patient in levels(jsd_long$patient)) {
+  tmp <- panel_subsample(jsd_long[jsd_long$patient == patient, ])
+  if (nrow(tmp) == 0) next
+  plot(jsd ~ avg_meth, col = as.numeric(as.factor(tmp$location)), pch = ".", data = tmp, main = patient[1])
 }
 ```
 
@@ -364,11 +433,13 @@ for (patient in levels(shannons$patient)) {
 
 ```{r, fig.width = 8, fig.height = 11}
 par(mfrow = c(4, 4), pty = "s")
-for (patient in levels(shannons$patient)) {
-  tmp <- shannons[shannons$patient == patient, ]
-  for (loc in unique(tmp$location)) {
-    tmp <- shannons[shannons$patient == patient & shannons$location == loc, ]
-    plot(shannon ~ avg_meth,
+for (patient in levels(jsd_long$patient)) {
+  for (loc in unique(jsd_long$location[jsd_long$patient == patient])) {
+    tmp <- panel_subsample(
+      jsd_long[jsd_long$patient == patient & jsd_long$location == loc, ]
+    )
+    if (nrow(tmp) == 0) next
+    plot(jsd ~ avg_meth,
       col = as.numeric(as.factor(tmp$location)),
       pch = ".", data = tmp, main = paste(loc, patient[1])
     )
@@ -378,14 +449,17 @@ for (patient in levels(shannons$patient)) {
 
 # Stats
 
-## Original by Atreya
+## Data prep for differential testing
 
-We reread everything from scratch (!); todo streamline.
+`process_reports2` builds the per-cell, per-window i_total and methylation
+matrices, summarises them per (patient, sub-location) group, and applies a
+50% row-NA filter. The result feeds every contrast in `diff_entropy_test()`
+below.
 
 ```{r}
 process_reports2 <- function(cf_fp) {
   fn <- basename(cf_fp)
-  patient  <- sub(regex_combo, "\\1", fn)
+  patient <- sub(regex_combo, "\\1", fn)
   location <- sub(regex_combo, "\\2", fn)
 
   fe_fp <- file.path(dirname(cf_fp),
@@ -415,54 +489,54 @@ process_reports2 <- function(cf_fp) {
   out <- cf[, .(cell_meth = mean(mean_meth, na.rm = TRUE)), by = cell_id]
   setorder(out, cell_id)
 
-  shannon <- if (nrow(fe) > 0)
-    fe[, .(shannon = jsd, avg_meth = mean_meth_mean)] else
-    data.table(shannon = numeric(0), avg_meth = numeric(0))
+  jsd_dt <- if (nrow(fe) > 0)
+    fe[, .(jsd = jsd, avg_meth = mean_meth_mean)] else
+    data.table(jsd = numeric(0), avg_meth = numeric(0))
 
   list(
-    shannon = shannon,
-    sampen = se, meth = ms, cell_meth = out$cell_meth
+    jsd = jsd_dt,
+    i_total = se, meth = ms, cell_meth = out$cell_meth
   )
 }
 
 all_data <- bplapply(cf_files, process_reports2, BPPARAM = param)
-sampens <- do.call(cbind, lapply(all_data, \(x) x$sampen))
-meths   <- do.call(cbind, lapply(all_data, \(x) x$meth))
+i_total_mat <- do.call(cbind, lapply(all_data, \(x) x$i_total))
+meths <- do.call(cbind, lapply(all_data, \(x) x$meth))
 
 
 meta <- data.frame(
-  colname = colnames(sampens),
+  colname = colnames(i_total_mat),
   patient = sub(regex_combo, "\\1", basename(cf_files))[
-    rep(seq_along(cf_files), sapply(all_data, \(x) ncol(x$sampen)))],
-  subloc  = sub(regex_combo, "\\2", basename(cf_files))[
-    rep(seq_along(cf_files), sapply(all_data, \(x) ncol(x$sampen)))],
+    rep(seq_along(cf_files), sapply(all_data, \(x) ncol(x$i_total)))],
+  subloc = sub(regex_combo, "\\2", basename(cf_files))[
+    rep(seq_along(cf_files), sapply(all_data, \(x) ncol(x$i_total)))],
   cell_meth = unlist(lapply(all_data, \(x) x$cell_meth), recursive = FALSE)
 )
 meta$loc <- substr(meta$subloc, 1, 2)
 meta$loc <- relevel(factor(meta$loc), ref = "NC")
 meta <- meta[order(as.integer(meta$loc), meta$subloc, meta$patient), ]
-sampens <- sampens[, meta$colname]
+i_total_mat <- i_total_mat[, meta$colname]
 meths <- meths[, meta$colname]
 
 groups <- unique(meta[c("subloc", "patient")])
 groups <- groups[
   order(substr(groups$subloc, 1, 2), groups$subloc, groups$patient),
 ]
-sub_sampens <- do.call(cbind, lapply(seq_len(nrow(groups)), \(i) {
+sub_i_total <- do.call(cbind, lapply(seq_len(nrow(groups)), \(i) {
   cols <- meta$colname[
     meta$patient == groups$patient[i] & meta$subloc == groups$subloc[i]
   ]
-  rowMeans(sampens[, cols, drop = FALSE], na.rm = TRUE)
+  rowMeans(i_total_mat[, cols, drop = FALSE], na.rm = TRUE)
 }))
-colnames(sub_sampens) <- paste(groups$subloc, groups$patient, sep = "_")
+colnames(sub_i_total) <- paste(groups$subloc, groups$patient, sep = "_")
 
-sub_meths <- do.call(cbind, lapply(seq_len(nrow(groups)), \(i) {
+sub_meth <- do.call(cbind, lapply(seq_len(nrow(groups)), \(i) {
   cols <- meta$colname[
     meta$patient == groups$patient[i] & meta$subloc == groups$subloc[i]
   ]
   rowMeans(meths[, cols, drop = FALSE], na.rm = TRUE)
 }))
-colnames(sub_meths) <- paste(groups$subloc, groups$patient, sep = "_")
+colnames(sub_meth) <- paste(groups$subloc, groups$patient, sep = "_")
 ```
 
 So these data group entropies/i_total from different biopsy:patient pairs
@@ -470,210 +544,133 @@ So these data group entropies/i_total from different biopsy:patient pairs
 
 ```{r}
 row_na_frac <- \(x) mean(is.na(x)) >= 0.5
-rows_too_sparse <- apply(sub_sampens, 1, row_na_frac) |
-  apply(sub_meths, 1, row_na_frac)
+rows_too_sparse <- apply(sub_i_total, 1, row_na_frac) |
+  apply(sub_meth, 1, row_na_frac)
 
-sub_sampens <- sub_sampens[!rows_too_sparse, , drop = FALSE]
-sub_meths <- sub_meths[!rows_too_sparse, , drop = FALSE]
+sub_i_total <- sub_i_total[!rows_too_sparse, , drop = FALSE]
+sub_meth <- sub_meth[!rows_too_sparse, , drop = FALSE]
 ```
 
 
 
 ```{r, fig.width = 5, fig.height = 5}
-c02_nc <- data.frame(y = sub_sampens[, "NC_CRC02"], x = sub_meths[, "NC_CRC02"])
-c02_nc <- na.omit(c02_nc)
-sampled_data <- if (nrow(c02_nc) > 5000)
-                  c02_nc[sample(nrow(c02_nc), 5000), ] else c02_nc
-
-ggplot(sampled_data, aes(x = x, y = y)) +
-  geom_point(alpha = 0.6, size = 0.6) +
-  labs(
-    title = "Adjacent normal in CRC02",
-    x = "average methylation",
-    y = expression(i[total])
-  ) +
-  theme_ng()
-```
-
-
-Let's do a window-wise i_total vs meth with loc and patient, regardless of the annotation of the window. Mind the quadratic meth term (not sure what for).
-
-```{r,  fig.width = 5, fig.height = 5}
-rowwise_lm <- function(i) {
-  df <- data.frame(
-    sampen = sub_sampens[i, ],
-    meth = sub_meths[i, ],
-    loc = factor(substr(groups$subloc, 1, 2)),
-    patient = groups$patient
-  )
-  df$loc <- relevel(df$loc, ref = "NC")
-
-  fit <- try(lm(sampen ~ meth + I(meth^2) + loc + patient, data = df), silent = T)
-  s <- summary(fit)$coefficients
-
-  if (!("locPT" %in% rownames(s))) {
-    return(rep(NA, 5))
+nc_cols <- grep("^NC_", colnames(sub_i_total), value = TRUE)
+if (length(nc_cols) > 0) {
+  pick <- nc_cols[1]
+  nc_df <- data.frame(y = sub_i_total[, pick], x = sub_meth[, pick])
+  nc_df <- na.omit(nc_df)
+  if (nrow(nc_df) > 0) {
+    sampled_data <- if (nrow(nc_df) > 5000) nc_df[sample(nrow(nc_df), 5000), ] else nc_df
+    print(
+      ggplot(sampled_data, aes(x = x, y = y)) +
+        geom_point(alpha = 0.6, size = 0.6) +
+        labs(
+          title = paste("Adjacent normal in", sub("^NC_", "", pick)),
+          x = "average methylation",
+          y = expression(i[total])
+        ) +
+        theme_ng()
+    )
+  } else {
+    message("no finite NC rows in ", pick, "; skipping NC scatter")
   }
-
-  c(
-    estimate  = s["locPT", "Estimate"],
-    std_error = s["locPT", "Std. Error"],
-    t_value   = s["locPT", "t value"],
-    p_value   = s["locPT", "Pr(>|t|)"],
-    df        = df.residual(fit)
-  )
+} else {
+  message("no NC columns in sub_i_total; skipping NC scatter")
 }
-
-coefs_list <- bplapply(seq_len(nrow(sub_sampens)), rowwise_lm, BPPARAM = param)
-
-coefs_df <- do.call(rbind, coefs_list)
-colnames(coefs_df) <- c("estimate", "std_error", "t_value", "p_value", "df")
-coefs_df <- as.data.frame(coefs_df)
-
-
-coefs_df[] <- lapply(coefs_df, as.numeric)
-
-valid <- complete.cases(coefs_df)
-coefs_valid <- coefs_df[valid, ]
-
-s2 <- coefs_valid$std_error^2
-df_resid <- coefs_valid$df
-squeezed <- squeezeVar(var = s2, df = df_resid)
-
-moderated_t <- coefs_valid$estimate / sqrt(squeezed$var.post)
-moderated_p <- 2 * pt(-abs(moderated_t), df = squeezed$df.prior + df_resid)
-adj_p <- p.adjust(moderated_p, method = "BH")
-
-coefs_valid$moderated_t <- moderated_t
-coefs_valid$moderated_p <- moderated_p
-coefs_valid$adj_p <- adj_p
-
-coefs_df$moderated_t <- NA
-coefs_df$moderated_p <- NA
-coefs_df$adj_p <- NA
-coefs_df[
-  valid, c("moderated_t", "moderated_p", "adj_p")
-] <- coefs_valid[, c("moderated_t", "moderated_p", "adj_p")]
-
-
-coefs_df$region <- rownames(sub_sampens)
-
-saveRDS(object = coefs_df, 'atreyas_coefs.rds')
-
-table(coefs_df$adj_p < 0.05)
-hist(coefs_df$adj_p)
-
-sorted_idx <- order(coefs_df$adj_p, na.last = NA)
-
-top_2k_idx <- sorted_idx[1:min(2000, length(sorted_idx))]
-
-top_entropy <- sub_sampens[top_2k_idx, ]
-top_meth <- sub_meths[top_2k_idx, ]
 ```
 
 
-## Heatmap including diff entropic (Atreya's)
+# jsd vs i_total per-window summaries {.tabset .tabset-pills}
 
-Rows are restricted to the top 2000 windows by BH-adjusted p-value from the PT vs NC
-comparison (meth + location + patient model), then further to complete cases across all
-biopsy groups. Clustering all ~300k windows genome-wide is not tractable.
-Columns are biopsy groups (patient x location), annotated at the top.
+amet exports per-feature `jsd` (across-cell heterogeneity) and per-window
+median `i_total` (within-cell heterogeneity). Per-annotation R2 of location
+on each summary statistic is reported when the annotation matrix is present.
 
-amet's window BED carries no per-window genomic feature columns, so the
-right-hand row annotation is a placeholder showing significance only.
+```{r build_jsd_median_long}
+jsd_median_long <- jsd_long %>%
+  transmute(window, jsd_median = jsd, patient, location)
+jsd_median_long$location <- factor(jsd_median_long$location,
+                                   levels = c("NC", "PT", "LN", "ML", "MP", "MO"))
 
-```{r, fig.width = 16, fig.height = 10}
-stopifnot(all(rownames(top_entropy) == rownames(top_meth)))
-
-cc_top <- complete.cases(top_entropy) & complete.cases(top_meth)
-top_entropy_cc <- top_entropy[cc_top, ]
-top_meth_cc <- top_meth[cc_top, ]
-coefs_df_top <- coefs_df[top_2k_idx[cc_top], ]
-
-row.hc <- hclust(dist(top_entropy_cc), method = "ward.D2")
-
-column_ha <- HeatmapAnnotation(
-  location = substr(groups$subloc, 1, 2),
-  patient = groups$patient
-)
-
-row_ha <- rowAnnotation(tile_annotation = as.matrix(data.frame(
-  diff_sampen_atreya = coefs_df_top$adj_p < 0.05
-)))
-
-Heatmap(top_entropy_cc,
-  name = expression(i[total]),
-  top_annotation = column_ha,
-  right_annotation = row_ha,
-  show_row_names = FALSE,
-  show_column_names = FALSE,
-  cluster_columns = FALSE,
-  cluster_rows = row.hc
-) + Heatmap(top_meth_cc,
-  name = "DNA methylation",
-  col = colorRamp2(c(0, 1), c("white", "black")),
-  show_row_names = FALSE,
-  show_column_names = FALSE,
-  cluster_columns = FALSE,
-  cluster_rows = row.hc
-)
+cat("jsd_median rows:", nrow(jsd_median_long),
+    "| groups:", length(unique(paste(jsd_median_long$patient,
+                                     jsd_median_long$location))), "\n")
 ```
 
-# H vs S driver categorization {.tabset .tabset-pills}
-
-amet exports per-feature `jsd` (across-cell heterogeneity). adjS analogue
-(per-window median i_total) is computed from `sampens_list`. Per-annotation
-R2 cannot be built without a per-window annotation matrix, so this section
-reports only the global adjS / jsd long tables.
-
-```{r read_adj_shannons}
-adj_shannons_long <- shannons %>%
-  transmute(window, adjH = shannon, patient, location)
-adj_shannons_long$location <- factor(adj_shannons_long$location,
-                                     levels = c("NC", "PT", "LN", "ML", "MP", "MO"))
-
-cat("adjH rows:", nrow(adj_shannons_long),
-    "| groups:", length(unique(paste(adj_shannons_long$patient,
-                                     adj_shannons_long$location))), "\n")
-```
-
-```{r build_adj_sampens_long}
-adj_sampens_long <- lapply(sampens_list, function(s) {
+```{r build_i_total_median_long}
+i_total_median_long <- lapply(i_total_list, function(s) {
   data.frame(
-    window   = names(s$median),
-    adjS     = s$median,
-    patient  = s$patient,
+    window = names(s$median),
+    i_total_median = s$median,
+    patient = s$patient,
     location = s$location,
     stringsAsFactors = FALSE
   )
 }) %>% bind_rows()
 
-adj_sampens_long$location <- factor(adj_sampens_long$location,
+i_total_median_long$location <- factor(i_total_median_long$location,
                                     levels = c("NC", "PT", "LN", "ML", "MP", "MO"))
 
-cat("adjS rows:", nrow(adj_sampens_long), "\n")
+cat("i_total_median rows:", nrow(i_total_median_long), "\n")
 ```
 
 ```{r r2_driver_windows}
-saveRDS(list(adj_shannons_long = adj_shannons_long,
-             adj_sampens_long  = adj_sampens_long),
+r2_safe_win <- function(y, grp) {
+  df <- data.frame(y = y, g = grp)
+  df <- df[!is.na(df$y), ]
+  if (nrow(df) < 3 || length(unique(df$g)) < 2) return(NA_real_)
+  tryCatch(summary(lm(y ~ g, data = df))$r.squared,
+           error = function(e) NA_real_)
+}
+
+if (ncol(annot) > 0 && nrow(annot) > 0) {
+  ann_cols_win <- colnames(annot)[sapply(annot, function(x)
+    is.numeric(x) && any(!is.na(x) & x > 0))]
+  common_win <- intersect(jsd_median_long$window, i_total_median_long$window)
+  common_win <- intersect(common_win, rownames(annot))
+
+  r2_drivers_win <- purrr::compact(lapply(ann_cols_win, function(a) {
+    members <- rownames(annot)[!is.na(annot[[a]]) & annot[[a]] > 0]
+    members <- intersect(members, common_win)
+    if (length(members) < 10) return(NULL)
+    sub_J <- jsd_median_long[jsd_median_long$window %in% members, ]
+    sub_I <- i_total_median_long[i_total_median_long$window %in% members, ]
+    data.frame(
+      annotation = a,
+      r2_jsd_median = r2_safe_win(sub_J$jsd_median, sub_J$location),
+      r2_i_total_median = r2_safe_win(sub_I$i_total_median, sub_I$location),
+      n_windows = length(members)
+    )
+  })) %>% bind_rows()
+} else {
+  r2_drivers_win <- data.frame(annotation = character(),
+                               r2_jsd_median = numeric(),
+                               r2_i_total_median = numeric(),
+                               n_windows = integer())
+}
+
+saveRDS(list(jsd_median_long = jsd_median_long,
+             i_total_median_long = i_total_median_long,
+             r2_drivers_win = r2_drivers_win),
         file = "crc_windows_driver_r2.rds")
+
+r2_drivers_win
 ```
 
-## adjH vs adjS median per location
+## jsd_median vs i_total_median median per location
 
 ```{r adjH_adjS_medians, fig.width = 5, fig.height = 5}
 hm_win <- inner_join(
-  adj_shannons_long %>%
+  jsd_median_long %>%
     group_by(annotation = "all windows", location) %>%
-    summarise(adjH = median(adjH, na.rm = TRUE), .groups = "drop"),
-  adj_sampens_long %>%
+    summarise(jsd_median = median(jsd_median, na.rm = TRUE), .groups = "drop"),
+  i_total_median_long %>%
     group_by(annotation = "all windows", location) %>%
-    summarise(adjS = median(adjS, na.rm = TRUE), .groups = "drop"),
+    summarise(i_total_median = median(i_total_median, na.rm = TRUE), .groups = "drop"),
   by = c("annotation", "location")
 )
 
-ggplot(hm_win, aes(x = adjH, y = adjS, color = location, label = location)) +
+ggplot(hm_win, aes(x = jsd_median, y = i_total_median, color = location, label = location)) +
   geom_point(size = 3) +
   scale_color_manual(values = crc_location_pal) +
   ggrepel::geom_text_repel(size = 3) +
@@ -694,21 +691,82 @@ de <- list()
 
 ```{r ptnc, fig.width = 5, fig.height = 5}
 de$pt_vs_nc <- diff_entropy_test(
-  sub_sampens = sub_sampens,
-  sub_meths   = sub_meths,
-  groups      = groups,
-  formula     = "sampen ~ meth + I(meth^2) + loc + patient",
-  loc_levels  = c("PT","NC"),
-  ref_level   = "NC",
-  contrast    = "locPT",
-  param       = param,
-  top_n       = 2000,
-  out_file    = "pt_vs_nc_coefs.rds"
+  sub_i_total = sub_i_total,
+  sub_meth = sub_meth,
+  groups = groups,
+  formula = "i_total ~ meth + I(meth^2) + loc + patient",
+  loc_levels = c("PT","NC"),
+  ref_level = "NC",
+  contrast = "locPT",
+  param = param,
+  top_n = 2000,
+  out_file = "pt_vs_nc_coefs.rds"
 )
 
 head(de$pt_vs_nc$coefs_df)
-hist(coefs_df$adj_p)
+if (any(is.finite(de$pt_vs_nc$coefs_df$adj_p))) hist(de$pt_vs_nc$coefs_df$adj_p)
 table(de$pt_vs_nc$coefs_df$adj_p < 0.05)
+```
+
+### Heatmap of top differentially entropic windows (PT vs NC)
+
+Rows are the top 2000 windows by BH-adjusted p-value, then restricted to
+complete cases across all biopsy groups. Columns are biopsy groups
+(patient x sub-location), annotated at the top. Right-hand row annotation
+carries the differential-entropy flag plus the binarised per-window
+genomic-feature overlaps when those columns are present.
+
+```{r ptnc_heatmap, fig.width = 16, fig.height = 10}
+top_entropy <- de$pt_vs_nc$top_entropy
+top_meth <- de$pt_vs_nc$top_meth
+coefs_df <- de$pt_vs_nc$coefs_df
+
+stopifnot(all(rownames(top_entropy) == rownames(top_meth)))
+
+cc_top <- complete.cases(top_entropy) & complete.cases(top_meth)
+top_entropy_cc <- top_entropy[cc_top, , drop = FALSE]
+top_meth_cc <- top_meth[cc_top, , drop = FALSE]
+coefs_df_top <- coefs_df[match(rownames(top_entropy_cc), coefs_df$region), ]
+
+if (nrow(top_entropy_cc) >= 2) {
+  row.hc <- hclust(dist(top_entropy_cc), method = "ward.D2")
+
+  column_ha <- HeatmapAnnotation(
+    location = substr(groups$subloc, 1, 2),
+    patient = groups$patient
+  )
+
+  row_ann_df <- data.frame(
+    diff_i_total_sig = coefs_df_top$adj_p < 0.05
+  )
+  if (ncol(annot) > 0 && nrow(annot) > 0) {
+    overlay <- annot[coefs_df_top$region, , drop = FALSE]
+    overlay[] <- lapply(overlay, function(x) {
+      if (is.numeric(x)) as.integer(!is.na(x) & x > 0) else x
+    })
+    row_ann_df <- cbind(row_ann_df, overlay)
+  }
+  row_ha <- rowAnnotation(tile_annotation = as.matrix(row_ann_df))
+
+  draw(Heatmap(top_entropy_cc,
+    name = "i_total",
+    top_annotation = column_ha,
+    right_annotation = row_ha,
+    show_row_names = FALSE,
+    show_column_names = FALSE,
+    cluster_columns = FALSE,
+    cluster_rows = row.hc
+  ) + Heatmap(top_meth_cc,
+    name = "DNA methylation",
+    col = colorRamp2(c(0, 1), c("white", "black")),
+    show_row_names = FALSE,
+    show_column_names = FALSE,
+    cluster_columns = FALSE,
+    cluster_rows = row.hc
+  ))
+} else {
+  message("differential heatmap: fewer than 2 complete-case windows, skipping")
+}
 ```
 
 ## LN vs PT
@@ -716,20 +774,20 @@ table(de$pt_vs_nc$coefs_df$adj_p < 0.05)
 
 ```{r, fig.width = 5, fig.height = 5}
 de$ln_vs_pt <- diff_entropy_test(
-  sub_sampens = sub_sampens,
-  sub_meths   = sub_meths,
-  groups      = groups,
-  formula     = "sampen ~ meth + I(meth^2) + loc + patient",
-  loc_levels  = c("PT","LN"),
-  ref_level   = "PT",
-  contrast    = "locLN",
-  param       = param,
-  top_n       = 2000,
-  out_file    = "ln_vs_pt_coefs.rds"
+  sub_i_total = sub_i_total,
+  sub_meth = sub_meth,
+  groups = groups,
+  formula = "i_total ~ meth + I(meth^2) + loc + patient",
+  loc_levels = c("PT","LN"),
+  ref_level = "PT",
+  contrast = "locLN",
+  param = param,
+  top_n = 2000,
+  out_file = "ln_vs_pt_coefs.rds"
 )
 
 head(de$ln_vs_pt$coefs_df)
-hist(de$ln_vs_pt$coefs_df$p_value)
+if (any(is.finite(de$ln_vs_pt$coefs_df$p_value))) hist(de$ln_vs_pt$coefs_df$p_value)
 table(de$ln_vs_pt$coefs_df$adj_p < 0.05)
 ```
 
@@ -737,19 +795,19 @@ table(de$ln_vs_pt$coefs_df$adj_p < 0.05)
 
 ```{r lnnc, fig.width = 5, fig.height = 5}
 de$ln_vs_nc <- diff_entropy_test(
-  sub_sampens = sub_sampens,
-  sub_meths   = sub_meths,
-  groups      = groups,
-  formula     = "sampen ~ meth + I(meth^2) + loc + patient",
-  loc_levels  = c("NC","LN"),
-  ref_level   = "NC",
-  contrast    = "locLN",
-  param       = param,
-  top_n       = 2000,
-  out_file    = "ln_vs_nc_coefs.rds"
+  sub_i_total = sub_i_total,
+  sub_meth = sub_meth,
+  groups = groups,
+  formula = "i_total ~ meth + I(meth^2) + loc + patient",
+  loc_levels = c("NC","LN"),
+  ref_level = "NC",
+  contrast = "locLN",
+  param = param,
+  top_n = 2000,
+  out_file = "ln_vs_nc_coefs.rds"
 )
 
-hist(de$ln_vs_nc$coefs_df$p_value)
+if (any(is.finite(de$ln_vs_nc$coefs_df$p_value))) hist(de$ln_vs_nc$coefs_df$p_value)
 table(de$ln_vs_nc$coefs_df$adj_p < 0.05)
 ```
 
@@ -757,19 +815,19 @@ table(de$ln_vs_nc$coefs_df$adj_p < 0.05)
 
 ```{r mlln, fig.width = 5, fig.height = 5}
 de$ml_vs_ln <- diff_entropy_test(
-  sub_sampens = sub_sampens,
-  sub_meths   = sub_meths,
-  groups      = groups,
-  formula     = "sampen ~ meth + I(meth^2) + loc + patient",
-  loc_levels  = c("ML","LN"),
-  ref_level   = "LN",
-  contrast    = "locML",
-  param       = param,
-  top_n       = 2000,
-  out_file    = "ml_vs_ln_coefs.rds"
+  sub_i_total = sub_i_total,
+  sub_meth = sub_meth,
+  groups = groups,
+  formula = "i_total ~ meth + I(meth^2) + loc + patient",
+  loc_levels = c("ML","LN"),
+  ref_level = "LN",
+  contrast = "locML",
+  param = param,
+  top_n = 2000,
+  out_file = "ml_vs_ln_coefs.rds"
 )
 
-hist(de$ml_vs_ln$coefs_df$p_value)
+if (any(is.finite(de$ml_vs_ln$coefs_df$p_value))) hist(de$ml_vs_ln$coefs_df$p_value)
 table(de$ml_vs_ln$coefs_df$adj_p < 0.05)
 ```
 
@@ -778,19 +836,19 @@ table(de$ml_vs_ln$coefs_df$adj_p < 0.05)
 
 ```{r mlnc, fig.width = 5, fig.height = 5}
 de$ml_vs_nc <- diff_entropy_test(
-  sub_sampens = sub_sampens,
-  sub_meths   = sub_meths,
-  groups      = groups,
-  formula     = "sampen ~ meth + I(meth^2) + loc + patient",
-  loc_levels  = c("ML","NC"),
-  ref_level   = "NC",
-  contrast    = "locML",
-  param       = param,
-  top_n       = 2000,
-  out_file    = "ml_vs_nc_coefs.rds"
+  sub_i_total = sub_i_total,
+  sub_meth = sub_meth,
+  groups = groups,
+  formula = "i_total ~ meth + I(meth^2) + loc + patient",
+  loc_levels = c("ML","NC"),
+  ref_level = "NC",
+  contrast = "locML",
+  param = param,
+  top_n = 2000,
+  out_file = "ml_vs_nc_coefs.rds"
 )
 
-hist(de$ml_vs_nc$coefs_df$p_value)
+if (any(is.finite(de$ml_vs_nc$coefs_df$p_value))) hist(de$ml_vs_nc$coefs_df$p_value)
 table(de$ml_vs_nc$coefs_df$adj_p < 0.05)
 ```
 
@@ -798,19 +856,19 @@ table(de$ml_vs_nc$coefs_df$adj_p < 0.05)
 
 ```{r mpml, fig.width = 5, fig.height = 5}
 de$mp_vs_ml <- diff_entropy_test(
-  sub_sampens = sub_sampens,
-  sub_meths   = sub_meths,
-  groups      = groups,
-  formula     = "sampen ~ meth + I(meth^2) + loc + patient",
-  loc_levels  = c("MP","ML"),
-  ref_level   = "ML",
-  contrast    = "locMP",
-  param       = param,
-  top_n       = 2000,
-  out_file    = "mp_vs_ml_coefs.rds"
+  sub_i_total = sub_i_total,
+  sub_meth = sub_meth,
+  groups = groups,
+  formula = "i_total ~ meth + I(meth^2) + loc + patient",
+  loc_levels = c("MP","ML"),
+  ref_level = "ML",
+  contrast = "locMP",
+  param = param,
+  top_n = 2000,
+  out_file = "mp_vs_ml_coefs.rds"
 )
 
-hist(de$mp_vs_ml$coefs_df$p_value)
+if (any(is.finite(de$mp_vs_ml$coefs_df$p_value))) hist(de$mp_vs_ml$coefs_df$p_value)
 table(de$mp_vs_ml$coefs_df$adj_p < 0.05)
 ```
 
@@ -818,31 +876,201 @@ table(de$mp_vs_ml$coefs_df$adj_p < 0.05)
 
 ```{r mpnc, fig.width = 5, fig.height = 5}
 de$mp_vs_nc <- diff_entropy_test(
-  sub_sampens = sub_sampens,
-  sub_meths   = sub_meths,
-  groups      = groups,
-  formula     = "sampen ~ meth + I(meth^2) + loc + patient",
-  loc_levels  = c("MP","NC"),
-  ref_level   = "NC",
-  contrast    = "locMP",
-  param       = param,
-  top_n       = 2000,
-  out_file    = "mp_vs_nc_coefs.rds"
+  sub_i_total = sub_i_total,
+  sub_meth = sub_meth,
+  groups = groups,
+  formula = "i_total ~ meth + I(meth^2) + loc + patient",
+  loc_levels = c("MP","NC"),
+  ref_level = "NC",
+  contrast = "locMP",
+  param = param,
+  top_n = 2000,
+  out_file = "mp_vs_nc_coefs.rds"
 )
 
-hist(de$mp_vs_nc$coefs_df$p_value)
+if (any(is.finite(de$mp_vs_nc$coefs_df$p_value))) hist(de$mp_vs_nc$coefs_df$p_value)
 table(de$mp_vs_nc$coefs_df$adj_p < 0.05)
 ```
 
-```{r debug}
-saveRDS(de, file = 'de_list.rds')
+```{r save_de_list, cache = FALSE, error = FALSE}
+stopifnot(exists("de"))
+de_path <- file.path(params$out_dir, "de_list.rds")
+message("save_de_list: de has ", length(de), " entries (",
+        paste(names(de), collapse = ", "), ")")
+saveRDS(de, file = de_path)
+message("save_de_list: wrote ", de_path, " (", file.size(de_path), " bytes)")
 ```
 
 # Plotting {.tabset .tabset-pills}
 
-amet's window BED has no per-window genomic-feature annotation matrix; UpSetR / Jaccard-graph / pheatmap chunks require that matrix and so are not portable. They are dropped here.
+UpSetR / Jaccard / pheatmap blocks on (annotation x differential-entropy)
+co-occurrence. All gated on the annotation matrix being available.
 
-<!-- Section dropped: Plotting / Gains and losses of entropy / UpSetR / Graph Jaccards / Pheatmap Jaccards / Up and down-entropic separately / GO require a per-window annotation matrix that amet does not export. -->
+```{r build_full_annot}
+full_annot_ok <- ncol(annot) > 0 && nrow(annot) > 0
+if (full_annot_ok) {
+  full_annot <- annot
+  ## conserved/no-change SCNA is dropped because it is the implicit baseline.
+  full_annot <- full_annot[, setdiff(colnames(full_annot),
+                                      "crc01_nc_scna"), drop = FALSE]
+  for (contrast in names(de)) {
+    coef_tab <- de[[contrast]]$coefs_df
+    tmp <- merge(data.frame(region = rownames(full_annot)),
+                 coef_tab[, c("region", "moderated_t", "adj_p")],
+                 by = "region", all.x = TRUE, sort = FALSE)
+    full_annot[[paste0(contrast, "__mod_t")]] <- tmp$moderated_t
+    full_annot[[paste0(contrast, "__signif")]] <- !is.na(tmp$adj_p) & tmp$adj_p < 0.05
+  }
+} else {
+  full_annot <- data.frame()
+  message("annotation matrix unavailable, skipping UpSetR / Jaccard chunks")
+}
+```
+
+## UpSetR
+
+```{r upset, fig.width = 16, fig.height = 10}
+if (full_annot_ok) {
+  mat <- full_annot
+  mat <- mat[, !grepl("__mod_t$", colnames(mat)), drop = FALSE]
+  signif_cols <- grep("__signif$", names(mat), value = TRUE)
+
+  mat[sapply(mat, is.logical)] <- lapply(mat[sapply(mat, is.logical)], as.integer)
+  rows_with_signif_de <- rowSums(mat[, signif_cols, drop = FALSE], na.rm = TRUE) > 0
+  mat <- mat[rows_with_signif_de, , drop = FALSE]
+
+  if (nrow(mat) > 0 && ncol(mat) > 0) {
+    mat_bin <- as.data.frame((mat > 0) * 1)
+    upset(mat_bin,
+          nsets = ncol(mat_bin),
+          nintersects = 30,
+          order.by = "freq")
+  } else {
+    message("upset: no significant rows, skipping")
+  }
+} else {
+  message("upset: annotation matrix unavailable")
+}
+```
+
+## Graph Jaccards
+
+```{r jaccard_graph}
+if (full_annot_ok && exists("mat_bin") && ncol(mat_bin) >= 2) {
+  jaccard <- function(x, y) {
+    u <- sum(x | y)
+    if (u == 0) NA_real_ else sum(x & y) / u
+  }
+  assoc <- outer(names(mat_bin), names(mat_bin),
+                 Vectorize(function(a, b) jaccard(mat_bin[[a]], mat_bin[[b]])))
+  dimnames(assoc) <- list(names(mat_bin), names(mat_bin))
+  assoc[is.na(assoc)] <- 0
+  g <- graph_from_adjacency_matrix(assoc, mode = "undirected",
+                                   weighted = TRUE, diag = FALSE)
+  V(g)$is_signif <- grepl("__signif$", V(g)$name)
+  V(g)$color <- ifelse(V(g)$is_signif, "tomato", "skyblue")
+
+  coords <- layout_with_fr(g, niter = 1e4)
+  w <- E(g)$weight
+  edge_cols <- colorRampPalette(c("lightgrey", "darkblue"))(100)
+  edge_cols_alpha <- if (length(w) > 0 && diff(range(w)) > 0) {
+    a <- (w - min(w)) / diff(range(w))
+    paste0(edge_cols[cut(w, breaks = 100)], sprintf("%02X", as.integer(a * 255)))
+  } else {
+    rep(edge_cols[1], length(w))
+  }
+  plot(g, vertex.size = 7, vertex.label.cex = 0.8,
+       vertex.color = V(g)$color, layout = coords,
+       edge.width = E(g)$weight * 10,
+       edge.color = edge_cols_alpha)
+} else {
+  message("jaccard graph: insufficient annotation matrix or no significant rows")
+}
+```
+
+## Pheatmap Jaccards
+
+```{r jaccard_pheatmap, fig.width = 8, fig.height = 8}
+if (full_annot_ok && exists("assoc") && nrow(assoc) >= 2) {
+  assoc_pheat <- assoc
+  assoc_pheat[!is.finite(assoc_pheat)] <- 0
+  pheatmap(assoc_pheat,
+           clustering_distance_rows = "euclidean",
+           clustering_distance_cols = "euclidean",
+           main = "Feature co-annotation (jaccard)")
+}
+```
+
+## Annotation overlap in differential-entropy windows (HMM and non-HMM)
+
+```{r annotation_overlap_dotplots, fig.width = 11, fig.height = 4}
+if (full_annot_ok) {
+  rd_full <- as.data.frame(full_annot)
+  signif_cols <- grep("__signif$", names(rd_full), value = TRUE)
+  modt_cols <- grep("__mod_t$", names(rd_full), value = TRUE)
+  annot_features <- setdiff(names(rd_full), c(signif_cols, modt_cols))
+
+  rd_bin <- as.data.frame(lapply(rd_full[, annot_features, drop = FALSE],
+                                  function(x) {
+    if (is.numeric(x)) as.integer(!is.na(x) & x > 0) else as.integer(as.logical(x))
+  }))
+
+  build_prop_df <- function(annot_set) {
+    grid <- expand.grid(annotation = annot_set,
+                        contrast = signif_cols,
+                        direction = c("Up", "Down"),
+                        stringsAsFactors = FALSE)
+    grid$proportion <- vapply(seq_len(nrow(grid)), function(i) {
+      ann <- grid$annotation[i]
+      ct <- grid$contrast[i]
+      dir <- grid$direction[i]
+      sig_flag <- as.logical(rd_full[[ct]])
+      mod_t <- rd_full[[sub("__signif$", "__mod_t", ct)]]
+      pos <- if (dir == "Up") mod_t >= 0 else mod_t < 0
+      total <- sum(sig_flag & pos, na.rm = TRUE)
+      if (total == 0) return(NA_real_)
+      hits <- sum(rd_bin[[ann]] == 1 & sig_flag & pos, na.rm = TRUE)
+      hits / total
+    }, numeric(1))
+    grid$contrast_clean <- gsub("__signif$", "", grid$contrast)
+    grid[!is.na(grid$proportion), ]
+  }
+
+  hmm_features <- grep("_hmm$", annot_features, value = TRUE)
+  non_hmm <- setdiff(annot_features, hmm_features)
+
+  if (length(non_hmm) > 0) {
+    prop_non_hmm <- build_prop_df(non_hmm)
+    print(
+      ggplot(prop_non_hmm, aes(x = contrast_clean, y = annotation)) +
+        geom_point(aes(size = proportion, color = direction)) +
+        scale_size(range = c(1, 6)) +
+        scale_color_manual(values = c("Up" = "#d95f02", "Down" = "#1b9e77")) +
+        facet_wrap(~ direction, nrow = 1) +
+        labs(x = "contrast", y = "annotation",
+             title = "Annotation overlap in diff i_total windows (non-HMM)") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              axis.text = element_text(size = 7))
+    )
+  }
+  if (length(hmm_features) > 0) {
+    prop_hmm <- build_prop_df(hmm_features)
+    print(
+      ggplot(prop_hmm, aes(x = contrast_clean, y = annotation)) +
+        geom_point(aes(size = proportion, color = direction)) +
+        scale_size(range = c(1, 6)) +
+        scale_color_manual(values = c("Up" = "#d95f02", "Down" = "#1b9e77")) +
+        facet_wrap(~ direction, nrow = 1) +
+        labs(x = "contrast", y = "annotation",
+             title = "Annotation overlap in diff i_total windows (HMM)") +
+        theme_ng() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              axis.text = element_text(size = 7))
+    )
+  }
+}
+```
 
 # Session
 

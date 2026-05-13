@@ -15,9 +15,32 @@ params:
   win_cell_feature: ""
   win_feature: ""
   win_bed: ""
+  windows_annotation: ""
   manifest: ""
   out_dir: ""
+  log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
+
+```{r logging_early, include = FALSE}
+source(Sys.getenv("AMET_RENDER_HELPERS"))
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
+
+```{r load_window_annotation}
+window_annotation <- amet_load_annotation_matrix(params$windows_annotation)
+if (is.null(window_annotation)) {
+  message("[annotation] no per-window annotation matrix; per-locus annotation ",
+          "UMAPs will be skipped")
+  annotation_cols <- character(0)
+} else {
+  annotation_cols <- setdiff(names(window_annotation),
+                             c("chrom", "start", "end", "feature_id"))
+  cat("Annotations attached to windows:", length(annotation_cols), "\n")
+  cat("Windows in annotation matrix:", nrow(window_annotation), "\n")
+}
+```
 
 ```{r setup}
 suppressPackageStartupMessages({
@@ -41,7 +64,6 @@ source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 source(file.path(repo_root, "workflow", "scripts", "embedding_utils.R"))
 
-param <- SerialParam()
 
 knitr::opts_chunk$set(
   echo = TRUE,
@@ -56,11 +78,11 @@ knitr::opts_chunk$set(
 N_HVW <- 1000
 N_PCS <- 10
 
-## Only the methylation-stable amet score (i_total) and methylation are
-## carried forward; raw S and adjS variants are not exported.
+## amet exports i_total and mean_meth per (cell, window); both are carried
+## forward as separate assays for embedding.
 assay_map <- c(
   "i_total" = "i_total",
-  "meth"    = "methylation"
+  "meth" = "methylation"
 )
 ```
 
@@ -97,7 +119,7 @@ man <- fread(params$manifest)
 col_data <- as.data.frame(unique(win_cf[, .(cell_id)]))
 col_data <- merge(col_data, as.data.frame(man),
                   by = "cell_id", all.x = TRUE)
-col_data$stage   <- factor(col_data$stage)
+col_data$stage <- factor(col_data$stage)
 col_data$lineage <- factor(col_data$lineage10x)
 rownames(col_data) <- col_data$cell_id
 
@@ -113,7 +135,7 @@ build_assay_mat <- function(value_col) {
 
 assays_list <- list(
   i_total = build_assay_mat("i_total"),
-  meth    = build_assay_mat("mean_meth")
+  meth = build_assay_mat("mean_meth")
 )
 
 cat("Cells:", nrow(col_data), "\n")
@@ -148,7 +170,7 @@ plot_umap_stage <- function(coords, kept_cols, title_prefix) {
 
 plot_umap_lineage <- function(coords, kept_cols, title_prefix) {
   df <- data.frame(
-    umap1   = coords[, 1], umap2 = coords[, 2],
+    umap1 = coords[, 1], umap2 = coords[, 2],
     lineage = col_data$lineage[kept_cols]
   )
   ggplot(df, aes(x = umap1, y = umap2, color = lineage)) +
@@ -201,8 +223,6 @@ saveRDS(
 
 ## By stage {.tabset .tabset-pills}
 
-<!-- Section dropped: amet has no raw S, so the win_stage_S chunk is not reproduced. -->
-
 ```{r win_stage_i_total, fig.width = ng_fig_size(1, 1, panel_mm = 60)$w, fig.height = ng_fig_size(1, 1, panel_mm = 60)$h}
 ### i_total
 if (!is.null(win_embeds[["i_total"]])) {
@@ -222,8 +242,6 @@ if (!is.null(win_embeds[["methylation"]])) {
 ```
 
 ## By lineage {.tabset .tabset-pills}
-
-<!-- Section dropped: amet has no raw S, so win_lineage_S is not reproduced. -->
 
 ```{r win_lineage_i_total, fig.width = ng_fig_size(1, 1, panel_mm = 60, legend_mm = 55)$w, fig.height = ng_fig_size(1, 1, panel_mm = 60, legend_mm = 55)$h}
 ### i_total
@@ -289,8 +307,8 @@ ve_win <- bind_rows(lapply(names(assay_map), function(akey) {
   kept <- win_embeds[[lbl]]$kept_cols
   hvw_mat <- assays_list[[akey]][win_embeds[[lbl]]$hvf_idx, kept, drop = FALSE]
   data.frame(
-    assay   = lbl,
-    stage   = median(row_variance_explained(hvw_mat, col_data$stage[kept]),   na.rm = TRUE),
+    assay = lbl,
+    stage = median(row_variance_explained(hvw_mat, col_data$stage[kept]), na.rm = TRUE),
     lineage = median(row_variance_explained(hvw_mat, col_data$lineage[kept]), na.rm = TRUE))
 }))
 
@@ -324,7 +342,7 @@ sil_win <- data.frame(
 sil_long <- pivot_longer(sil_win, c("silhouette_stage", "silhouette_lineage"),
                          names_to = "grouping", values_to = "silhouette")
 sil_long$grouping <- sub("silhouette_", "", sil_long$grouping)
-sil_long$assay    <- factor(sil_long$assay, levels = assay_map)
+sil_long$assay <- factor(sil_long$assay, levels = assay_map)
 
 ggplot(sil_long, aes(x = assay, y = silhouette, fill = grouping)) +
   geom_col(position = position_dodge(width = 0.8)) +
@@ -339,14 +357,14 @@ ggplot(sil_long, aes(x = assay, y = silhouette, fill = grouping)) +
 
 ```{r cell_df}
 cell_df <- data.frame(
-  cell_id   = col_data$cell_id,
-  stage     = col_data$stage,
-  lineage   = col_data$lineage,
+  cell_id = col_data$cell_id,
+  stage = col_data$stage,
+  lineage = col_data$lineage,
   mean_i_total = colMeans(assays_list$i_total, na.rm = TRUE),
-  mean_meth = colMeans(assays_list$meth,    na.rm = TRUE)
+  mean_meth = colMeans(assays_list$meth, na.rm = TRUE)
 )
 
-write.csv(cell_df, "argelaguet_per_cell_summary.csv", row.names = FALSE)
+write.csv(cell_df, "argelaguet_embeddings_per_cell_summary.csv", row.names = FALSE)
 ```
 
 ```{r violins, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 2)$h}
@@ -361,6 +379,168 @@ ggplot(cell_long, aes(x = stage, y = value, fill = stage)) +
   labs(x = "stage", y = "per-cell mean") +
   theme_ng() +
   theme(legend.position = "none")
+```
+
+# Per-locus (per-window) embeddings
+
+Per-locus UMAPs are computed on the windows x cells matrix transposed to
+windows x (i_total). Each point is one window; colouring uses the fractional
+overlap with each annotation. Provides a complementary view to the cell-level
+UMAPs above.
+
+```{r per_locus_setup}
+## Build a per-locus feature matrix: rows = windows, cols = stages
+## (mean i_total across cells in the stage). Reduces noise vs raw per-cell
+## values and produces a square enough matrix for PCA on common cases.
+have_annotation <- length(annotation_cols) > 0L
+per_locus_ok <- FALSE
+if (have_annotation) {
+  ## Aggregate per (window, stage) so the embedding sees the stage signal,
+  ## not single-cell noise. win_cf was loaded in load_amet; reuse it after
+  ## attaching stage from col_data.
+  cell_stage <- as.data.frame(unique(col_data[, c("cell_id", "stage")]))
+  win_cf_stage <- merge(win_cf, cell_stage, by = "cell_id", all.x = TRUE)
+  win_agg <- win_cf_stage[!is.na(stage),
+                          .(mean_i_total = mean(i_total, na.rm = TRUE)),
+                          by = .(feature_id, stage)]
+  m_long <- dcast(win_agg, feature_id ~ stage, value.var = "mean_i_total")
+  feat_ids <- m_long$feature_id
+  m <- as.matrix(m_long[, -1])
+  rownames(m) <- feat_ids
+  m[!is.finite(m)] <- NA
+  keep <- rowSums(!is.na(m)) >= max(2L, ncol(m) - 1L)
+  m <- m[keep, , drop = FALSE]
+  if (nrow(m) >= 50L && ncol(m) >= 2L) per_locus_ok <- TRUE
+  cat("Per-locus matrix:", nrow(m), "windows x", ncol(m), "stages\n")
+}
+```
+
+```{r per_locus_umap}
+## We want UMAP coords per window. run_embedding expects features x cells and
+## treats cells (columns) as observations, so feed it stages x windows: each
+## window becomes a "cell" and gets one UMAP point.
+if (per_locus_ok) {
+  pca_in <- t(m)
+  keep_cols <- apply(pca_in, 2, function(x) sd(x, na.rm = TRUE) > 0)
+  pca_in <- pca_in[, keep_cols, drop = FALSE]
+  per_locus_embed <- run_embedding(pca_in,
+                                   n_hvf = min(2000L, nrow(pca_in)),
+                                   n_pcs = min(10L, nrow(pca_in) - 1L),
+                                   n_neighbors = 15L, min_dist = 0.3,
+                                   seed = 42L)
+} else {
+  per_locus_embed <- NULL
+}
+
+if (is.null(per_locus_embed)) {
+  cat("Skipping per-locus UMAP: insufficient data.\n")
+} else {
+  cat("Per-locus UMAP windows kept:",
+      sum(per_locus_embed$kept_cols), "\n")
+}
+```
+
+```{r per_locus_umap_i_total, fig.width = ng_fig_size(1, 1, panel_mm = 60)$w, fig.height = ng_fig_size(1, 1, panel_mm = 60)$h}
+if (!is.null(per_locus_embed)) {
+  ## kept_cols of run_embedding indexes the columns it received (= windows in
+  ## pca_in). Map back to window names and take per-window mean i_total over
+  ## stages.
+  kept_feats <- colnames(pca_in)[per_locus_embed$kept_cols]
+  per_locus_i_total <- rowMeans(m[kept_feats, , drop = FALSE], na.rm = TRUE)
+  per_locus_df <- data.frame(
+    feature_id = kept_feats,
+    umap1 = per_locus_embed$umap[, 1],
+    umap2 = per_locus_embed$umap[, 2],
+    mean_i_total = per_locus_i_total
+  )
+  print(ggplot(per_locus_df, aes(x = umap1, y = umap2, color = mean_i_total)) +
+    geom_point(size = 0.4, alpha = 0.7) +
+    scale_color_viridis_c() +
+    labs(title = expression("Per-locus UMAP coloured by mean " * i[total]),
+         x = "UMAP 1", y = "UMAP 2") +
+    theme_ng(base_size = 8))
+}
+```
+
+```{r per_locus_umap_i_norm, fig.width = ng_fig_size(1, 1, panel_mm = 60)$w, fig.height = ng_fig_size(1, 1, panel_mm = 60)$h}
+## i_norm = i_total / (k_max * H(mean_meth)) per (window, cell), then take the
+## per-window mean across cells for colouring. Same UMAP coordinates as i_total.
+if (!is.null(per_locus_embed) && !is.null(assays_list$meth)) {
+  i_total_mat <- as.matrix(assays_list$i_total)
+  meth_mat <- as.matrix(assays_list$meth)
+  i_norm_mat <- matrix(NA_real_, nrow(i_total_mat), ncol(i_total_mat),
+                       dimnames = dimnames(i_total_mat))
+  for (j in seq_len(ncol(i_total_mat))) {
+    i_norm_mat[, j] <- compute_i_norm(i_total_mat[, j], meth_mat[, j],
+                                      params$i_max_lag)
+  }
+  rows_in_sce <- intersect(kept_feats, rownames(i_norm_mat))
+  per_locus_i_norm <- rep(NA_real_, length(kept_feats))
+  names(per_locus_i_norm) <- kept_feats
+  if (length(rows_in_sce) > 0) {
+    per_locus_i_norm[rows_in_sce] <- rowMeans(
+      i_norm_mat[rows_in_sce, , drop = FALSE], na.rm = TRUE)
+  }
+  per_locus_df_norm <- data.frame(
+    feature_id = kept_feats,
+    umap1 = per_locus_embed$umap[, 1],
+    umap2 = per_locus_embed$umap[, 2],
+    mean_i_norm = per_locus_i_norm
+  )
+  print(ggplot(per_locus_df_norm, aes(x = umap1, y = umap2, color = mean_i_norm)) +
+    geom_point(size = 0.4, alpha = 0.7) +
+    scale_color_viridis_c() +
+    labs(title = expression("Per-locus UMAP coloured by mean " * i[norm]),
+         x = "UMAP 1", y = "UMAP 2") +
+    theme_ng(base_size = 8))
+}
+```
+
+```{r per_locus_umap_jsd, fig.width = ng_fig_size(1, 1, panel_mm = 60)$w, fig.height = ng_fig_size(1, 1, panel_mm = 60)$h}
+## Per-locus jsd from amet's win_feature table (per group). Aggregate to a
+## per-window median across groups for colouring.
+if (!is.null(per_locus_embed)) {
+  feat_tbl <- fread(params$win_feature)
+  jsd_by_win <- feat_tbl[, .(median_jsd = median(jsd, na.rm = TRUE)),
+                         by = feature_id]
+  jsd_df <- merge(per_locus_df, jsd_by_win, by = "feature_id", all.x = TRUE)
+  if (any(is.finite(jsd_df$median_jsd))) {
+    print(ggplot(jsd_df, aes(x = umap1, y = umap2, color = median_jsd)) +
+      geom_point(size = 0.4, alpha = 0.7) +
+      scale_color_viridis_c(option = "magma") +
+      labs(title = "Per-locus UMAP coloured by median jsd",
+           x = "UMAP 1", y = "UMAP 2") +
+      theme_ng(base_size = 8))
+  } else {
+    cat("median_jsd is all NA; skipping jsd panel.\n")
+  }
+}
+```
+
+```{r per_locus_umap_annotation, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 2)$h}
+## Colour the per-locus UMAP by each annotation's overlap fraction.
+if (!is.null(per_locus_embed) && have_annotation) {
+  ann_df <- merge(per_locus_df,
+                  as.data.frame(window_annotation[, c("feature_id",
+                                                      annotation_cols),
+                                                  with = FALSE]),
+                  by = "feature_id", all.x = TRUE)
+  ann_long <- pivot_longer(ann_df, all_of(annotation_cols),
+                           names_to = "annotation", values_to = "frac")
+  ann_long <- ann_long[!is.na(ann_long$frac), ]
+  if (nrow(ann_long) > 0L) {
+    print(ggplot(ann_long, aes(x = umap1, y = umap2, color = frac)) +
+      geom_point(size = 0.2, alpha = 0.6) +
+      facet_wrap(~ annotation, ncol = 4) +
+      scale_color_viridis_c(option = "plasma", limits = c(0, 1)) +
+      labs(title = "Per-locus UMAP, overlap fraction per annotation",
+           x = "UMAP 1", y = "UMAP 2", color = "frac") +
+      theme_ng(base_size = 6) +
+      theme(strip.text = element_text(size = 5.5)))
+  } else {
+    cat("No non-NA annotation values to plot.\n")
+  }
+}
 ```
 
 ```{r session}

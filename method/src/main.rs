@@ -110,7 +110,7 @@ fn main() -> Result<()> {
                 let n_cov = window.n_observed() as u32;
                 let mc = marginal_counts(&window);
                 let pair_tables: Vec<PairCounts> = (1..=i_max_lag)
-                    .map(|lag| pair_counts(&window, lag))
+                    .map(|lag| pair_counts(&window, lag, cli.max_pair_distance))
                     .collect();
                 let mean = window.mean_meth();
                 let i_per_lag: Vec<f64> =

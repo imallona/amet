@@ -15,9 +15,57 @@ params:
   win_cell_feature: ""
   win_feature: ""
   win_bed: ""
+  windows_annotation: ""
   manifest: ""
   out_dir: ""
+  log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
+
+```{r logging_early, include = FALSE}
+source(Sys.getenv("AMET_RENDER_HELPERS"))
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
+
+```{r load_window_annotation}
+## Per-window annotation overlap (fraction). Rows are aligned to windows
+## by feature_id; the matrix is binarised below as <annotation>_bin.
+## Sparse-proto guard: missing or empty file leaves ann_mat = NULL and
+## downstream annotation chunks skip cleanly.
+suppressPackageStartupMessages({
+  library(data.table)
+})
+data.table::setDTthreads(params$threads)
+
+ann_mat <- NULL
+ann_bin <- NULL
+ann_cols <- character(0)
+ann_path <- params$windows_annotation
+if (is.character(ann_path) && nzchar(ann_path) && file.exists(ann_path)) {
+  ann_tbl <- tryCatch(
+    fread(ann_path, sep = "\t", header = TRUE, nThread = params$threads),
+    error = function(e) {
+      message("[ecker_windows] failed to read windows_annotation: ", conditionMessage(e))
+      NULL
+    })
+  if (!is.null(ann_tbl) && nrow(ann_tbl) > 0L &&
+      "feature_id" %in% colnames(ann_tbl)) {
+    keep <- setdiff(colnames(ann_tbl), c("chrom", "start", "end", "feature_id"))
+    if (length(keep) > 0L) {
+      ann_mat <- as.data.frame(ann_tbl[, c("feature_id", keep), with = FALSE])
+      rownames(ann_mat) <- ann_mat$feature_id
+      ann_cols <- keep
+      ann_bin <- as.data.frame(lapply(ann_mat[, ann_cols, drop = FALSE],
+                                      function(x) as.integer(x > 0)))
+      colnames(ann_bin) <- paste0(ann_cols, "_bin")
+      rownames(ann_bin) <- ann_mat$feature_id
+    }
+  }
+}
+cat("Annotation columns:", length(ann_cols),
+    "| windows annotated:", if (is.null(ann_mat)) 0L else nrow(ann_mat), "\n")
+```
 
 ```{r setup}
 suppressPackageStartupMessages({
@@ -32,7 +80,6 @@ repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."
 source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 
-param <- SerialParam()
 
 knitr::opts_chunk$set(
   echo = TRUE,
@@ -42,6 +89,13 @@ knitr::opts_chunk$set(
   fig.path = "ecker_windows_plots/"
 )
 ```
+
+## Cell selection upstream of this Rmd:
+##   Per (region, sub_type) stratum, cells are picked by source-TAR size
+##   (proxy for observed-CpG coverage; tar contains one allc tsv.gz per cell)
+##   with plate-stratified round-robin so a single sequencing plate cannot
+##   dominate the pick. Cap = max_cells_per_combo (config/datasets.yaml:
+##   prototype.cells_per_group in proto, full.max_cells_per_combo otherwise).
 
 ```{r load_meta}
 man <- fread(params$manifest)
@@ -55,7 +109,7 @@ cat("Major types:", length(unique(man$major_type)), "\n")
 ## + mean_meth, and per-window-per-group jsd (loaded but not used in this
 ## Rmd, kept for symmetry with the per-feature reports).
 win_cf <- fread(params$win_cell_feature)
-keep_cols <- intersect(c("cell_id", "cell_class", "major_type", "sub_region", "sub_type"),
+keep_cols <- intersect(c("cell_id", "cell_class", "major_type", "region", "sub_type"),
                        colnames(man))
 win_cf <- merge(win_cf, man[, ..keep_cols],
                 by = "cell_id", all.x = TRUE)
@@ -79,20 +133,19 @@ win_cf <- win_cf[feature_id %in% keep_win]
 cat("Windows after NA filter (>= 70% cells covered):", uniqueN(win_cf$feature_id), "\n")
 ```
 
-<!-- Section dropped: amet's i_total is methylation-stable by construction, so no per-window meth-correction step is needed. -->
+<!-- amet i_total is per cell, from cell_feature.tsv.gz. No meth correction here. -->
 
 # QC
 
 ```{r cell_qc_df}
 cell_df <- win_cf[, .(
   mean_i_total = mean(i_total,  na.rm = TRUE),
-  mean_meth    = mean(mean_meth, na.rm = TRUE)
+  mean_meth = mean(mean_meth, na.rm = TRUE)
 ), by = .(cell_id, cell_class, major_type)]
 
-write.csv(cell_df, "ecker_per_cell_summary.csv", row.names = FALSE)
+write.csv(cell_df, "ecker_windows_per_cell_summary.csv", row.names = FALSE)
 ```
 
-<!-- Section dropped: amet has no raw S, so the sampen_by_class chunk is not reproduced. -->
 
 ```{r itotal_by_class, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
 ggplot(cell_df, aes(x = cell_class, y = mean_i_total, fill = cell_class)) +
@@ -106,13 +159,119 @@ ggplot(cell_df, aes(x = cell_class, y = mean_i_total, fill = cell_class)) +
 ```
 
 ```{r meth_vs_itotal, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
-ggplot(cell_df, aes(x = mean_meth, y = mean_i_total, color = cell_class)) +
+ggplot(cell_df[is.finite(mean_meth) & is.finite(mean_i_total)],
+       aes(x = mean_meth, y = mean_i_total, color = cell_class)) +
   geom_point(size = 0.4, alpha = 0.5) +
   scale_color_manual(values = ecker_cell_class_pal) +
   guides(color = guide_legend(override.aes = list(size = 2, alpha = 1), ncol = 2)) +
   theme_ng(base_size = 8) +
   labs(x = "mean methylation", y = expression("mean " * i[total]),
        title = expression("Global " * i[total] * " vs methylation per cell"))
+```
+
+# Per-annotation breakdowns
+
+Per cell, average i_total across windows that do (1) or do not (0) overlap
+each annotation. Stratifies the within-cell score by genomic context (PMD-like
+H3K9me3, H3K27me3, gene bodies, etc.).
+
+```{r per_cell_by_annotation, fig.width = ng_fig_size(4, 2)$w, fig.height = ng_fig_size(4, 2)$h}
+if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
+  cat("Annotation matrix empty; skipping per-annotation breakdowns.\n")
+} else {
+  common_wins <- intersect(unique(win_cf$feature_id), rownames(ann_bin))
+  if (length(common_wins) == 0L) {
+    cat("No window overlap between i_total table and annotation matrix; skipping.\n")
+  } else {
+    win_sub <- win_cf[feature_id %in% common_wins]
+    ann_bin_sub <- ann_bin[common_wins, , drop = FALSE]
+
+    df_list <- lapply(colnames(ann_bin_sub), function(bf) {
+      bin <- ann_bin_sub[[bf]]
+      names(bin) <- rownames(ann_bin_sub)
+      tmp <- win_sub[, .(
+        mean_i_total = mean(i_total, na.rm = TRUE),
+        mean_meth = mean(mean_meth, na.rm = TRUE)
+      ), by = .(cell_id, feature_id)]
+      tmp[, bin := bin[feature_id]]
+      out <- tmp[!is.na(bin), .(
+        mean_i_total = mean(mean_i_total, na.rm = TRUE),
+        mean_meth = mean(mean_meth, na.rm = TRUE)
+      ), by = .(cell_id, bin)]
+      out[, annotation := sub("_bin$", "", bf)]
+      out
+    })
+
+    df_ann <- rbindlist(df_list)
+    df_ann <- merge(df_ann, man[, ..keep_cols], by = "cell_id", all.x = TRUE)
+    df_ann$bin <- factor(df_ann$bin, levels = c(0, 1))
+
+    write.csv(df_ann, "ecker_windows_per_cell_by_annotation.csv", row.names = FALSE)
+
+    print(
+      ggplot(df_ann[is.finite(mean_i_total)],
+             aes(x = cell_class, y = mean_i_total, fill = bin)) +
+        geom_boxplot(outlier.size = 0.2, position = position_dodge(width = 0.8)) +
+        scale_fill_manual(values = c("0" = "#bbbbbb", "1" = "#d95f02"),
+                          name = "overlaps annotation") +
+        facet_wrap(~ annotation, ncol = 3) +
+        theme_ng(base_size = 7) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+              legend.position = "bottom") +
+        labs(x = NULL, y = expression("mean " * i[total]),
+             title = expression("Per-cell mean " * i[total] *
+                                " by annotation overlap (binarised)"))
+    )
+  }
+}
+```
+
+```{r jsd_by_annotation, fig.width = ng_fig_size(4, 2)$w, fig.height = ng_fig_size(4, 2)$h}
+## Across-cell JSD aggregated by binarised annotation overlap, per group
+## (cell_class).
+if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
+  cat("Annotation matrix empty; skipping per-annotation JSD aggregation.\n")
+} else if (!file.exists(params$win_feature)) {
+  cat("win_feature missing; skipping JSD aggregation.\n")
+} else {
+  win_feat <- fread(params$win_feature)
+  if (!"jsd" %in% colnames(win_feat) || nrow(win_feat) == 0L) {
+    cat("No jsd column in win_feature; skipping.\n")
+  } else {
+    keep_feat <- intersect(win_feat$feature_id, rownames(ann_bin))
+    if (length(keep_feat) == 0L) {
+      cat("No window overlap between jsd table and annotation matrix; skipping.\n")
+    } else {
+      jf <- win_feat[feature_id %in% keep_feat]
+      ann_bin_sub <- ann_bin[keep_feat, , drop = FALSE]
+
+      jsd_df <- rbindlist(lapply(colnames(ann_bin_sub), function(bf) {
+        bin <- ann_bin_sub[[bf]]
+        names(bin) <- rownames(ann_bin_sub)
+        tmp <- copy(jf)
+        tmp[, bin := bin[feature_id]]
+        tmp[, annotation := sub("_bin$", "", bf)]
+        tmp[!is.na(bin), .(jsd, bin, annotation,
+                          group = if ("group" %in% colnames(tmp)) group else "all")]
+      }))
+      jsd_df$bin <- factor(jsd_df$bin, levels = c(0, 1))
+
+      write.csv(jsd_df, "ecker_windows_jsd_by_annotation.csv", row.names = FALSE)
+
+      print(
+        ggplot(jsd_df, aes(x = annotation, y = jsd, fill = bin)) +
+          geom_boxplot(outlier.size = 0.2, position = position_dodge(width = 0.8)) +
+          scale_fill_manual(values = c("0" = "#bbbbbb", "1" = "#1b9e77"),
+                            name = "overlaps annotation") +
+          theme_ng(base_size = 7) +
+          theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+                legend.position = "bottom") +
+          labs(x = NULL, y = "jsd",
+               title = "Per-window JSD by annotation overlap (binarised)")
+      )
+    }
+  }
+}
 ```
 
 ```{r session}

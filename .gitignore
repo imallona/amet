@@ -26,3 +26,6 @@ workflow/Rmd/*_plots/
 
 # Misc
 *.cpg
+
+# Local staging area, not part of the Snakemake workflow.
+tmp/

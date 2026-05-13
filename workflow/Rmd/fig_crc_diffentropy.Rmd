@@ -13,7 +13,16 @@ params:
   out_dir: ""
   de: ""
   corrected_sce: ""
+  windows_annotation: ""
+  log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
+
+```{r logging_early, include = FALSE}
+source(Sys.getenv("AMET_RENDER_HELPERS"))
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
 
 ```{r setup}
 suppressPackageStartupMessages({
@@ -29,7 +38,8 @@ source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 
 knitr::opts_chunk$set(
-  echo    = TRUE,
+  echo = TRUE,
+  error = TRUE,
   message = FALSE,
   warning = FALSE
 )
@@ -40,18 +50,27 @@ if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 ```
 
 ```{r load}
-de     <- readRDS(params$de)
+de_path <- if (nzchar(params$de))
+             params$de else
+             file.path(params$out_dir, "de_list.rds")
+corrected_sce_path <- if (nzchar(params$corrected_sce))
+                       params$corrected_sce else
+                       file.path(params$out_dir, "sce_windows_colon_corrected.rds")
+de <- readRDS(de_path)
 embeds <- readRDS("crc_embeddings_debug.rds")
-sce    <- readRDS(params$corrected_sce)
+sce <- readRDS(corrected_sce_path)
 ```
 
 ```{r de-summaries}
-de_nc <- de[c("pt_vs_nc", "ln_vs_nc", "ml_vs_nc", "mp_vs_nc")]
+de_nc <- de[intersect(c("pt_vs_nc", "ln_vs_nc", "ml_vs_nc", "mp_vs_nc"), names(de))]
 
 summarize_contrast <- function(df, alpha = 0.05) {
-  sig <- df[df$adj_p < alpha, ]
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(upregulated = 0L, downregulated = 0L))
+  }
+  sig <- df[!is.na(df$adj_p) & df$adj_p < alpha, ]
   data.frame(
-    upregulated   = sum(sig$moderated_t >= 0, na.rm = TRUE),
+    upregulated = sum(sig$moderated_t >= 0, na.rm = TRUE),
     downregulated = sum(sig$moderated_t < 0,  na.rm = TRUE)
   )
 }
@@ -70,35 +89,130 @@ write.csv(summary_table, "crc_diffentropy_counts.csv", row.names = FALSE)
 ```
 
 ```{r prop-df}
-## amet's window BED has only (chrom, start, end, feature_id) columns; no
-## per-window genomic-feature annotation matrix is exported. Panel B requires
-## that matrix, so render an empty placeholder.
-prop_df <- data.frame(annotation = character(), contrast = character(),
-                      direction = character(), proportion = numeric())
+rd_sce <- as.data.frame(rowData(sce))
+ann_pretty <- c(
+  "pmds_pmd"                  = "PMDs",
+  "hmds_pmd"                  = "HMDs",
+  "H3K27me3_chip"             = "H3K27me3",
+  "H3K9me3_chip"              = "H3K9me3",
+  "H3K4me3_chip"              = "H3K4me3",
+  "laminb1_lad"               = "Lamin B1",
+  "genes_genes"               = "Genes",
+  "cpgIslandExt_cpgIslandExt" = "CpGi",
+  "crc01_gain_scna_scna"      = "SCNA gain",
+  "crc01_lost_scna_scna"      = "SCNA loss"
+)
+annot_features <- paste0(names(ann_pretty), "_bin")
+available_annot <- intersect(annot_features, colnames(rd_sce))
+all_regions <- rownames(rd_sce)
+
+if (length(available_annot) > 0 && nrow(rd_sce) > 0) {
+  prop_df <- bind_rows(lapply(names(de_nc), function(nm) {
+    cf <- de_nc[[nm]]$coefs_df
+    if (is.null(cf) || nrow(cf) == 0) return(NULL)
+    up <- cf$region[!is.na(cf$adj_p) & cf$adj_p < 0.05 & cf$moderated_t >= 0]
+    down <- cf$region[!is.na(cf$adj_p) & cf$adj_p < 0.05 & cf$moderated_t < 0]
+    is_up <- all_regions %in% up
+    is_down <- all_regions %in% down
+    bind_rows(lapply(available_annot, function(ann) {
+      ann_vec <- rd_sce[[ann]]
+      data.frame(
+        annotation = gsub("_bin$", "", ann),
+        contrast = nm,
+        direction = c("up", "down"),
+        proportion = c(
+          if (sum(is_up) > 0) sum(ann_vec[is_up] == 1, na.rm = TRUE) / sum(is_up) else NA_real_,
+          if (sum(is_down) > 0) sum(ann_vec[is_down] == 1, na.rm = TRUE) / sum(is_down) else NA_real_
+        ),
+        stringsAsFactors = FALSE
+      )
+    }))
+  })) %>% filter(!is.na(proportion))
+} else {
+  prop_df <- data.frame(annotation = character(), contrast = character(),
+                        direction = character(), proportion = numeric())
+}
 write.csv(prop_df, "crc_diffentropy_annotation_overlap.csv", row.names = FALSE)
 ```
 
 ```{r panel-b}
-prop_legend <- "proportion of windows\noverlapping annotation"
-pb <- ggplot() +
-  annotate("text", x = 0.5, y = 0.5,
-           label = "annotation overlap not available\n(amet windows BED has no per-window annotations)",
-           size = 2.8) +
-  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
-  theme_void() +
-  theme(plot.title = element_text(size = 8))
+if (nrow(prop_df) > 0) {
+  prop_df_plot <- prop_df %>%
+    mutate(annotation_label = factor(annotation,
+                                     levels = intersect(names(ann_pretty),
+                                                        unique(annotation)),
+                                     labels = unname(ann_pretty[intersect(
+                                       names(ann_pretty), unique(annotation))])),
+           contrast_clean = sub("_vs_nc$", "", contrast),
+           direction = factor(direction, levels = c("up", "down")))
+  pb <- ggplot(prop_df_plot, aes(x = contrast_clean, y = annotation_label)) +
+    geom_point(aes(size = proportion, color = direction)) +
+    scale_size(range = c(1, 6)) +
+    scale_color_manual(values = c("up" = "#d95f02", "down" = "#1b9e77")) +
+    facet_wrap(~ direction, nrow = 1) +
+    labs(x = "contrast (vs NC)", y = "annotation",
+         size = "proportion", color = "direction") +
+    theme_ng(base_size = 9) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          axis.text = element_text(size = 7),
+          legend.position = "bottom")
+} else {
+  pb <- ggplot() +
+    annotate("text", x = 0.5, y = 0.5,
+             label = "annotation overlap unavailable", size = 2.8) +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+    theme_void() +
+    theme(plot.title = element_text(size = 8))
+}
 ```
 
 ```{r panel-c}
-## Panel C groups windows by binarized rowData annotations on the SCE.
-## amet's window BED has none of those columns; render a placeholder.
-pc <- ggplot() +
-  annotate("text", x = 0.5, y = 0.5,
-           label = "per-cell adjS by annotation overlap not available\n(amet windows BED has no per-window annotations)",
-           size = 2.8) +
-  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
-  theme_void() +
-  theme(plot.title = element_text(size = 8))
+bin_cols <- intersect(annot_features, colnames(rd_sce))
+if (length(bin_cols) > 0 && "i_total_resid" %in% assayNames(sce)) {
+  assay_mat <- assay(sce, "i_total_resid")
+  cells <- colnames(sce)
+  cd <- as.data.frame(colData(sce))
+  df_list <- lapply(bin_cols, function(bf) {
+    bin <- rd_sce[[bf]]
+    m0 <- colMeans(assay_mat[bin == 0, , drop = FALSE], na.rm = TRUE)
+    m1 <- colMeans(assay_mat[bin == 1, , drop = FALSE], na.rm = TRUE)
+    data.frame(cell = rep(cells, 2),
+               bin = rep(c(0, 1), each = length(cells)),
+               mean_i_total_resid = c(m0, m1),
+               feature = gsub("_bin$", "", bf),
+               stringsAsFactors = FALSE)
+  })
+  loc_df <- data.frame(cell = cells, location = cd$location,
+                       stringsAsFactors = FALSE)
+  df_cells <- bind_rows(df_list) %>% left_join(loc_df, by = "cell")
+  df_cells$bin <- factor(df_cells$bin, levels = c(0, 1))
+  df_cells$feature <- factor(df_cells$feature,
+                             levels = intersect(names(ann_pretty),
+                                                unique(df_cells$feature)),
+                             labels = unname(ann_pretty[intersect(
+                               names(ann_pretty), unique(df_cells$feature))]))
+
+  pc <- ggplot(df_cells, aes(x = location, y = mean_i_total_resid,
+                             fill = bin)) +
+    geom_boxplot(outlier.size = 0.2,
+                 position = position_dodge(width = 0.8)) +
+    facet_wrap(~ feature, nrow = 2) +
+    scale_fill_manual(values = c("0" = "grey80", "1" = "#d95f02"),
+                      labels = c("absent", "present")) +
+    labs(x = "biopsy location", y = "i_total_resid (cell mean)",
+         fill = "annotation") +
+    theme_ng(base_size = 9) +
+    theme(strip.text = element_text(size = 7),
+          legend.position = "bottom")
+} else {
+  pc <- ggplot() +
+    annotate("text", x = 0.5, y = 0.5,
+             label = "per-cell i_total_resid by annotation unavailable",
+             size = 2.8) +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+    theme_void() +
+    theme(plot.title = element_text(size = 8))
+}
 ```
 
 ```{r single-panel-overlap, fig.width = 6.1, fig.height = 2.6}
@@ -107,20 +221,20 @@ print(pb_solo)
 
 ggsave(
   file.path(out_dir, "fig_crc_diffentropy_overlap_props.pdf"),
-  plot   = pb_solo,
-  width  = 6.1, height = 2.6, units = "in",
+  plot = pb_solo,
+  width = 6.1, height = 2.6, units = "in",
   device = cairo_pdf
 )
 ```
 
-```{r single-panel-cell-adjS, fig.width = 6.1, fig.height = 2.8}
+```{r single-panel-cell-i_total_resid, fig.width = 6.1, fig.height = 2.8}
 pc_solo <- pc
 print(pc_solo)
 
 ggsave(
-  file.path(out_dir, "fig_crc_diffentropy_cell_adjS.pdf"),
-  plot   = pc_solo,
-  width  = 6.1, height = 2.8, units = "in",
+  file.path(out_dir, "fig_crc_diffentropy_cell_i_total_resid.pdf"),
+  plot = pc_solo,
+  width = 6.1, height = 2.8, units = "in",
   device = cairo_pdf
 )
 ```

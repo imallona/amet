@@ -6,6 +6,68 @@ from glob import glob
 
 REFS = op.join(RESULTS, "refs")
 
+## Helper scripts every analytical Rmd sources via source() or via the
+## AMET_RENDER_HELPERS env var. Declared as snakemake inputs so script edits
+## invalidate stale HTMLs. Dataset-specific rules concatenate this with the
+## per-Rmd extras (driver_utils.R, diff_testing.R, embedding_utils.R).
+## Per-(group-stratum, plate) cell cap. In prototype mode this matches the
+## small reproducible subset; in full runs it comes from `full.max_cells_per_combo`.
+def _prototype_enabled():
+    """True when the active configfile turned prototype mode on. Defaults to
+    True so running `snakemake simulations` with only sim.yaml loaded still
+    parses (dataset paths get the proto suffix but aren't materialised)."""
+    return bool(config.get("prototype", {}).get("enabled", True))
+
+
+def max_cells_per_combo():
+    if _prototype_enabled():
+        return int(config["prototype"]["cells_per_group"])
+    return int(config["full"]["max_cells_per_combo"])
+
+
+def min_cells_per_group():
+    """Min cells per stratum before amet emits jsd. Proto is permissive; full
+    matches amet's own default (10) to suppress noisy small-group estimates."""
+    key = "min_cells_per_group_proto" if _prototype_enabled() \
+          else "min_cells_per_group_full"
+    return int(config["amet"][key])
+
+
+def run_suffix():
+    """`proto` when prototype.enabled is true, otherwise `full`. Used to suffix
+    each dataset's run_name so proto and full outputs live in distinct dirs."""
+    return "proto" if _prototype_enabled() else "full"
+
+
+def dataset_run_name(name):
+    """Build <name>_<suffix> from the prototype toggle. Datasets call this
+    instead of reading config[<name>][run_name] so flipping the toggle alone
+    re-routes outputs to a separate results/<name>_full/ directory."""
+    return f"{name}_{run_suffix()}"
+
+
+def proto_csv(dataset, key):
+    """Return the comma-joined config[dataset][key] list, or empty string if
+    the workflow is in full mode (prototype.enabled = false) or the key is
+    missing/unset. The manifest builder scripts already no-op on an empty
+    filter, so this keeps the shell templates simple while making it explicit
+    in the rule log that no proto filter is being applied in full runs."""
+    if not _prototype_enabled():
+        return ""
+    vals = config.get(dataset, {}).get(key) or []
+    return ",".join(vals)
+
+
+SCRIPTS_DIR = op.join(REPO_ROOT, "workflow", "scripts")
+RMD_SHARED_SCRIPTS = [
+    op.join(SCRIPTS_DIR, "render_logging.R"),
+    op.join(SCRIPTS_DIR, "plot_theme.R"),
+    op.join(SCRIPTS_DIR, "palettes.R"),
+]
+DRIVER_UTILS_R = op.join(SCRIPTS_DIR, "driver_utils.R")
+EMBEDDING_UTILS_R = op.join(SCRIPTS_DIR, "embedding_utils.R")
+DIFF_TESTING_R = op.join(SCRIPTS_DIR, "diff_testing.R")
+
 METHOD = op.join(REPO_ROOT, "method")
 ## Cargo.lock is gitignored (binary build artifact), so it's not listed as
 ## an input. cargo regenerates it from Cargo.toml on each build.

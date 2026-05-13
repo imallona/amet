@@ -3,8 +3,15 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - 'method/**'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'method/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
 
 jobs:
   rust:

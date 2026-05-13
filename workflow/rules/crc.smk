@@ -24,8 +24,8 @@ reads whatever is there.
 CRC_DATA = op.join(RESULTS, "crc")
 CRC_RAW = op.join(CRC_DATA, "raw")
 CRC_BEDS = op.join(CRC_DATA, "beds")
-CRC_RUN = op.join(RESULTS, config["crc"]["run_name"])
-CRC_RUN_NAME = config["crc"]["run_name"]
+CRC_RUN = op.join(RESULTS, dataset_run_name("crc"))
+CRC_RUN_NAME = dataset_run_name("crc")
 
 ## CRC annotations dict. Keys: cat (outer), values: list of subcats (inner).
 ## Wildcards: {subcat}_{cat}_{patient}_{location}.
@@ -55,14 +55,14 @@ CRC_ANNOTATIONS = {
 
 _CRC_LOCAL_ANNOTATIONS = CRC_ANNOTATIONS
 _CRC_LOCAL_PAIRS = [(sc, c) for c, subs in _CRC_LOCAL_ANNOTATIONS.items() for sc in subs]
-_CRC_ALL_PAIRS   = [(sc, c) for c, subs in CRC_ANNOTATIONS.items() for sc in subs]
+_CRC_ALL_PAIRS = [(sc, c) for c, subs in CRC_ANNOTATIONS.items() for sc in subs]
 _CRC_SUBCAT_RE = "|".join(sorted({sc for sc, _ in _CRC_ALL_PAIRS}))
-_CRC_CAT_RE    = "|".join(sorted({c  for _, c  in _CRC_ALL_PAIRS}))
+_CRC_CAT_RE = "|".join(sorted({c  for _, c  in _CRC_ALL_PAIRS}))
 
 ## hg19 BED trees. Both symlinked in by setup_barbara_links.sh:
 ##   hg19         (cpgIslandExt, SCNAs, genes/lines/sines.bed.gz)
 ##   hg19_curated (chromHMM, ChIP, lamin, PMD as plain .bed)
-CRC_HG19_WF      = op.join(CRC_DATA, "hg19")
+CRC_HG19_WF = op.join(CRC_DATA, "hg19")
 CRC_HG19_CURATED = op.join(CRC_DATA, "hg19_curated")
 
 def _crc_yamet_bed_path(subcat, cat):
@@ -150,8 +150,8 @@ checkpoint crc_make_manifest:
         manifest = op.join(CRC_DATA, "cells.tsv"),
     params:
         raw_dir = CRC_RAW,
-        proto_patients = ",".join(config["crc"]["proto_patients"]),
-        proto_locations = ",".join(config["crc"]["proto_locations"]),
+        proto_patients = proto_csv("crc", "proto_patients"),
+        proto_locations = proto_csv("crc", "proto_locations"),
         cells_per_group = config["prototype"]["cells_per_group"],
         prototype = "true" if config["prototype"]["enabled"] else "false",
     log:
@@ -160,8 +160,8 @@ checkpoint crc_make_manifest:
         """
         Rscript {workflow.basedir}/scripts/make_manifest_crc.R \
             --raw_dir {params.raw_dir} \
-            --proto_patients {params.proto_patients} \
-            --proto_locations {params.proto_locations} \
+            --proto_patients "{params.proto_patients}" \
+            --proto_locations "{params.proto_locations}" \
             --cells_per_group {params.cells_per_group} \
             --prototype {params.prototype} \
             --out {output.manifest} &> {log}
@@ -178,7 +178,7 @@ rule crc_per_combo_manifest:
         manifest = op.join(CRC_DATA, "manifests",
                            "{patient}_{location}.tsv"),
     params:
-        max_cells = config["prototype"]["cells_per_group"],
+        max_cells = max_cells_per_combo(),
     log:
         op.join(CRC_DATA, "logs", "manifest_{patient}_{location}.log"),
     shell:
@@ -222,7 +222,7 @@ rule crc_pull_yamet_bed:
         op.join("..", "envs", "bedtools.yml")
     wildcard_constraints:
         subcat = _CRC_SUBCAT_RE,
-        cat    = _CRC_CAT_RE,
+        cat = _CRC_CAT_RE,
     input:
         bed = lambda w: _crc_yamet_bed_path(w.subcat, w.cat),
     output:
@@ -248,7 +248,7 @@ rule crc_stage_annotation_bed:
         op.join("..", "envs", "bedtools.yml")
     wildcard_constraints:
         subcat = _CRC_SUBCAT_RE,
-        cat    = _CRC_CAT_RE,
+        cat = _CRC_CAT_RE,
     input:
         bed = op.join(CRC_BEDS, "{subcat}.{cat}.bed"),
     output:
@@ -265,11 +265,73 @@ rule crc_stage_annotation_bed:
         """
 
 
+rule crc_window_annotation_per_pair:
+    """Per-window overlap fraction with one annotation BED. For a 4-column BED
+    `-a`, `bedtools coverage` appends count, bases_covered, length_A, and
+    fraction; the fraction is column 8. Output is a single-column file with
+    header `<subcat>_<cat>`."""
+    wildcard_constraints:
+        subcat = _CRC_SUBCAT_RE,
+        cat = _CRC_CAT_RE,
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    input:
+        windows = op.join(CRC_RUN, "beds", "windows.bed"),
+        ann = op.join(CRC_RUN, "beds", "{subcat}.{cat}.bed"),
+    output:
+        frac = temp(op.join(CRC_RUN, "beds",
+                            "windows_annotation.{subcat}.{cat}.frac")),
+    log:
+        op.join(CRC_RUN, "logs",
+                "window_annotation_{subcat}_{cat}.log"),
+    shell:
+        r"""
+        mkdir -p $(dirname {output.frac})
+        (
+          echo "{wildcards.subcat}_{wildcards.cat}"
+          bedtools coverage -a {input.windows} -b {input.ann} | cut -f8
+        ) > {output.frac} 2> {log}
+        """
+
+
+rule crc_combine_window_annotations:
+    """Paste the per-pair window fractions next to the (chrom, start, end,
+    feature_id) windows BED. Header line is added so downstream readers can
+    use read_tsv directly."""
+    conda:
+        op.join("..", "envs", "bedtools.yml")
+    input:
+        windows = op.join(CRC_RUN, "beds", "windows.bed"),
+        fracs = expand(
+            op.join(CRC_RUN, "beds",
+                    "windows_annotation.{subcat}.{cat}.frac"),
+            zip,
+            subcat = [sc for sc, _ in _CRC_LOCAL_PAIRS],
+            cat = [c for _, c in _CRC_LOCAL_PAIRS],
+        ),
+    output:
+        tsv = op.join(CRC_RUN, "beds", "windows_annotation.tsv.gz"),
+    log:
+        op.join(CRC_RUN, "logs", "combine_window_annotations.log"),
+    shell:
+        r"""
+        mkdir -p $(dirname {output.tsv})
+        tmp_header=$(mktemp)
+        tmp_body=$(mktemp)
+        {{
+          echo -e "chrom\tstart\tend\tfeature_id" > $tmp_header
+          cat $tmp_header {input.windows} > $tmp_body
+          paste $tmp_body {input.fracs} | gzip -c > {output.tsv}
+        }} 2> {log}
+        rm -f $tmp_header $tmp_body
+        """
+
+
 rule run_amet_on_crc_features:
     """Run amet on one (subcat, cat, patient, location) combo."""
     wildcard_constraints:
         subcat = _CRC_SUBCAT_RE,
-        cat    = _CRC_CAT_RE,
+        cat = _CRC_CAT_RE,
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
@@ -292,7 +354,7 @@ rule run_amet_on_crc_features:
             "{subcat}_{cat}_{patient}_{location}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 4)
     log:
@@ -338,7 +400,7 @@ rule run_amet_on_crc_windows:
             CRC_RUN, "windows", "{patient}_{location}"),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
-        min_cells = config["amet"]["min_cells_per_group"],
+        min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 4)
     log:
@@ -397,74 +459,203 @@ def list_crc_windows_outputs(wildcards):
     return out
 
 
-def _crc_render_shell():
-    return r"""
-        mkdir -p {params.out_dir}
-        Rscript -e 'rmarkdown::render("{input.rmd}",
-            output_file="{wildcards.rmd_name}.html",
-            output_dir="{params.out_dir}",
-            knit_root_dir="{params.out_dir}",
+def _crc_render_shell(with_annotation = True):
+    helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R")
+    i_max_lag = config["amet"]["i_max_lag"]
+    annotation_line = (
+        '\n                windows_annotation="{{input.windows_annotation}}",'
+        if with_annotation else ""
+    )
+    return rf"""
+        mkdir -p {{params.out_dir}}
+        export AMET_RENDER_HELPERS="{helpers}"
+        Rscript -e 'rmarkdown::render("{{input.rmd}}",
+            output_file="{{params.rmd_name}}.html",
+            output_dir="{{params.out_dir}}",
+            knit_root_dir="{{params.out_dir}}",
             params=list(
-                features_dir="{params.features_dir}",
-                windows_dir="{params.windows_dir}",
-                win_bed="{input.win_bed}",
-                manifest="{input.manifest}",
-                out_dir="{params.out_dir}"),
-            quiet=TRUE)' &> {log}
+                features_dir="{{params.features_dir}}",
+                windows_dir="{{params.windows_dir}}",
+                win_bed="{{input.win_bed}}",
+                manifest="{{input.manifest}}",
+                out_dir="{{params.out_dir}}",{annotation_line}
+                log_path="{{log}}",
+                threads={{threads}},
+                i_max_lag={i_max_lag}),
+            quiet=TRUE)' &> {{log}}
         """
 
 
-rule render_crc_analytical_rmd:
-    """Render one of the four analytical CRC Rmds (crc, _windows,
-    _windows_sce, _embeddings). Each writes RDS/CSV intermediates that
-    the figure Rmds consume."""
-    wildcard_constraints:
-        rmd_name = "crc|crc_windows|crc_windows_sce|crc_embeddings",
+## The four analytical Rmds run in this order:
+##   crc          (per-feature, independent)
+##   crc_windows  -> sce_windows_colon.rds + de_list.rds
+##   crc_windows_sce  -> sce_windows_colon_corrected.rds
+##   crc_embeddings   -> crc_embeddings_debug.rds, crc_win_varexp.csv, crc_per_cell_summary.csv
+## RDS/CSV intermediates are declared as snakemake outputs/inputs so the chain
+## is enforced by the file graph, not by html-on-html ordering tricks.
+
+
+rule render_crc:
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "crc.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [DRIVER_UTILS_R],
         features = list_crc_features_outputs,
-        windows = list_crc_windows_outputs,
         win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
         manifest = op.join(CRC_DATA, "cells.tsv"),
     output:
-        html = op.join(CRC_RUN, "{rmd_name}.html"),
+        html = op.join(CRC_RUN, "crc.html"),
+        entropy_summaries = op.join(CRC_RUN, "crc_entropy_summaries.rds"),
+        driver_sd_range = op.join(CRC_RUN, "crc_driver_sd_range.rds"),
     params:
+        rmd_name = "crc",
         out_dir = CRC_RUN,
         features_dir = op.join(CRC_RUN, "features"),
         windows_dir = op.join(CRC_RUN, "windows"),
     log:
-        op.join(CRC_RUN, "logs", "render_{rmd_name}.log"),
+        op.join(CRC_RUN, "logs", "render_crc.log"),
+    threads: 4
+    shell:
+        _crc_render_shell(with_annotation = False)
+
+
+rule render_crc_windows:
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "crc_windows.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [DRIVER_UTILS_R, DIFF_TESTING_R],
+        features = list_crc_features_outputs,
+        windows = list_crc_windows_outputs,
+        win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(CRC_RUN, "beds", "windows_annotation.tsv.gz"),
+        manifest = op.join(CRC_DATA, "cells.tsv"),
+    output:
+        html = op.join(CRC_RUN, "crc_windows.html"),
+        sce_windows = op.join(CRC_RUN, "sce_windows_colon.rds"),
+        de_list = op.join(CRC_RUN, "de_list.rds"),
+    params:
+        rmd_name = "crc_windows",
+        out_dir = CRC_RUN,
+        features_dir = op.join(CRC_RUN, "features"),
+        windows_dir = op.join(CRC_RUN, "windows"),
+    log:
+        op.join(CRC_RUN, "logs", "render_crc_windows.log"),
+    threads: 4
     shell:
         _crc_render_shell()
 
 
-rule render_fig_crc_rmd:
-    """Render fig_crc.Rmd or fig_crc_diffentropy.Rmd; depends on the four
-    analytical Rmds because it loads their RDS intermediates."""
-    wildcard_constraints:
-        rmd_name = "fig_crc|fig_crc_diffentropy",
+rule render_crc_windows_sce:
     conda:
         op.join("..", "envs", "r-tools.yml")
     input:
-        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "{rmd_name}.Rmd"),
-        analytical = expand(op.join(CRC_RUN, "{r}.html"),
-                            r = ["crc",
-                                 "crc_windows",
-                                 "crc_windows_sce",
-                                 "crc_embeddings"]),
-        features = list_crc_features_outputs,
-        windows = list_crc_windows_outputs,
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "crc_windows_sce.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [DIFF_TESTING_R],
+        sce_windows = op.join(CRC_RUN, "sce_windows_colon.rds"),
+        de_list = op.join(CRC_RUN, "de_list.rds"),
         win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(CRC_RUN, "beds", "windows_annotation.tsv.gz"),
         manifest = op.join(CRC_DATA, "cells.tsv"),
     output:
-        html = op.join(CRC_RUN, "{rmd_name}.html"),
+        html = op.join(CRC_RUN, "crc_windows_sce.html"),
+        corrected_sce = op.join(CRC_RUN, "sce_windows_colon_corrected.rds"),
     params:
+        rmd_name = "crc_windows_sce",
         out_dir = CRC_RUN,
         features_dir = op.join(CRC_RUN, "features"),
         windows_dir = op.join(CRC_RUN, "windows"),
     log:
-        op.join(CRC_RUN, "logs", "render_{rmd_name}.log"),
+        op.join(CRC_RUN, "logs", "render_crc_windows_sce.log"),
+    threads: 4
+    shell:
+        _crc_render_shell()
+
+
+rule render_crc_embeddings:
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "crc_embeddings.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [EMBEDDING_UTILS_R],
+        corrected_sce = op.join(CRC_RUN, "sce_windows_colon_corrected.rds"),
+        win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(CRC_RUN, "beds", "windows_annotation.tsv.gz"),
+        manifest = op.join(CRC_DATA, "cells.tsv"),
+    output:
+        html = op.join(CRC_RUN, "crc_embeddings.html"),
+        embeddings_debug = op.join(CRC_RUN, "crc_embeddings_debug.rds"),
+        win_varexp = op.join(CRC_RUN, "crc_win_varexp.csv"),
+        per_cell_summary = op.join(CRC_RUN, "crc_per_cell_summary.csv"),
+    params:
+        rmd_name = "crc_embeddings",
+        out_dir = CRC_RUN,
+        features_dir = op.join(CRC_RUN, "features"),
+        windows_dir = op.join(CRC_RUN, "windows"),
+    log:
+        op.join(CRC_RUN, "logs", "render_crc_embeddings.log"),
+    threads: 4
+    shell:
+        _crc_render_shell()
+
+
+rule render_fig_crc:
+    """Compact CRC figure (single page panels A-H). Consumes the analytical
+    Rmds' entropy/driver/varexp/per-cell summaries plus the embeddings debug
+    RDS and the de_list."""
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_crc.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS + [DRIVER_UTILS_R],
+        entropy_summaries = op.join(CRC_RUN, "crc_entropy_summaries.rds"),
+        driver_sd_range = op.join(CRC_RUN, "crc_driver_sd_range.rds"),
+        embeddings_debug = op.join(CRC_RUN, "crc_embeddings_debug.rds"),
+        win_varexp = op.join(CRC_RUN, "crc_win_varexp.csv"),
+        per_cell_summary = op.join(CRC_RUN, "crc_per_cell_summary.csv"),
+        de_list = op.join(CRC_RUN, "de_list.rds"),
+        win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(CRC_RUN, "beds", "windows_annotation.tsv.gz"),
+        manifest = op.join(CRC_DATA, "cells.tsv"),
+    output:
+        html = op.join(CRC_RUN, "fig_crc.html"),
+    params:
+        rmd_name = "fig_crc",
+        out_dir = CRC_RUN,
+        features_dir = op.join(CRC_RUN, "features"),
+        windows_dir = op.join(CRC_RUN, "windows"),
+    log:
+        op.join(CRC_RUN, "logs", "render_fig_crc.log"),
+    threads: 4
+    shell:
+        _crc_render_shell()
+
+
+rule render_fig_crc_diffentropy:
+    """Differential-entropy CRC figure. Consumes de_list, the corrected SCE
+    and the embeddings debug RDS; does not need entropy/driver/varexp/per-cell
+    artifacts."""
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        rmd = op.join(REPO_ROOT, "workflow", "Rmd", "fig_crc_diffentropy.Rmd"),
+        scripts = RMD_SHARED_SCRIPTS,
+        de_list = op.join(CRC_RUN, "de_list.rds"),
+        embeddings_debug = op.join(CRC_RUN, "crc_embeddings_debug.rds"),
+        corrected_sce = op.join(CRC_RUN, "sce_windows_colon_corrected.rds"),
+        win_bed = op.join(CRC_RUN, "beds", "windows.bed"),
+        windows_annotation = op.join(CRC_RUN, "beds", "windows_annotation.tsv.gz"),
+        manifest = op.join(CRC_DATA, "cells.tsv"),
+    output:
+        html = op.join(CRC_RUN, "fig_crc_diffentropy.html"),
+    params:
+        rmd_name = "fig_crc_diffentropy",
+        out_dir = CRC_RUN,
+        features_dir = op.join(CRC_RUN, "features"),
+        windows_dir = op.join(CRC_RUN, "windows"),
+    log:
+        op.join(CRC_RUN, "logs", "render_fig_crc_diffentropy.log"),
+    threads: 4
     shell:
         _crc_render_shell()

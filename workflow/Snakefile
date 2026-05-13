@@ -17,7 +17,9 @@ R_TOOLS_ENV = op.join(REPO_ROOT, "workflow", "envs", "r-tools.yml")
 workdir: REPO_ROOT
 
 configfile: op.join(workflow.basedir, "config", "sim.yaml")
-configfile: op.join(workflow.basedir, "config", "datasets.yaml")
+## Dataset config (proto or full) is picked by the Makefile via
+## --configfile workflow/config/datasets_{proto,full}.yaml. Running snakemake
+## directly without --configfile leaves the per-dataset keys unset.
 
 include: op.join("rules", "common.smk")
 include: op.join("rules", "argelaguet.smk")
@@ -47,14 +49,14 @@ EVAL_OUTPUTS = [
 SIM_REPORT_HTML = op.join(SIM, "simulations_report.html")
 
 
-ARG_RUN_DIR = op.join(RESULTS, config["argelaguet"]["run_name"])
+ARG_RUN_DIR = op.join(RESULTS, dataset_run_name("argelaguet"))
 ARG_RMDS = ["argelaguet",
             "argelaguet_embeddings",
             "argelaguet_windows",
             "fig_argelaguet"]
 ARG_HTMLS = [op.join(ARG_RUN_DIR, f"{r}.html") for r in ARG_RMDS]
 
-CRC_RUN_DIR = op.join(RESULTS, config["crc"]["run_name"])
+CRC_RUN_DIR = op.join(RESULTS, dataset_run_name("crc"))
 CRC_RMDS = ["crc",
             "crc_windows",
             "crc_windows_sce",
@@ -63,7 +65,7 @@ CRC_RMDS = ["crc",
             "fig_crc_diffentropy"]
 CRC_HTMLS = [op.join(CRC_RUN_DIR, f"{r}.html") for r in CRC_RMDS]
 
-ECKER_RUN_DIR = op.join(RESULTS, config["ecker"]["run_name"])
+ECKER_RUN_DIR = op.join(RESULTS, dataset_run_name("ecker"))
 ECKER_RMDS = ["ecker",
               "ecker_windows",
               "ecker_embeddings",
@@ -94,15 +96,19 @@ rule ecker:
 rule render_simulations_report:
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "simulations_report.Rmd"),
+        helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R"),
         evals = EVAL_OUTPUTS,
     output: SIM_REPORT_HTML
     conda: R_TOOLS_ENV
     params:
         eval_dir = op.join(SIM, "eval"),
         out_dir = SIM,
+    log: op.join(SIM, "logs", "render_simulations_report.log")
     shell:
         r"""
-        Rscript -e 'rmarkdown::render("{input.rmd}", output_file="simulations_report.html", output_dir="{params.out_dir}", params=list(eval_dir="{params.eval_dir}"), quiet=TRUE)'
+        mkdir -p {params.out_dir} $(dirname {log})
+        export AMET_RENDER_HELPERS="{input.helpers}"
+        Rscript -e 'rmarkdown::render("{input.rmd}", output_file="simulations_report.html", output_dir="{params.out_dir}", params=list(eval_dir="{params.eval_dir}", log_path="{log}"), quiet=TRUE)' &> {log}
         """
 
 

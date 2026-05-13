@@ -233,7 +233,7 @@ crc_annotation_pal <- c(
 )
 
 # ---------------------------------------------------------------------------
-# Shared: driver categorization (adjH vs adjS)
+# Shared: driver categorization (jsd vs i_total)
 # ---------------------------------------------------------------------------
 
 driver_pal <- c(

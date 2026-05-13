@@ -20,10 +20,20 @@ params:
   windows_sce: ""
   de: ""
   corrected_sce: ""
+  windows_annotation: ""
+  log_path: ""
+  threads: 1
+  i_max_lag: 3
 ---
+
+```{r logging_early, include = FALSE}
+source(Sys.getenv("AMET_RENDER_HELPERS"))
+param <- amet_setup_render_logging(params$log_path, params$threads)
+```
 
 ```{r, setup}
 suppressPackageStartupMessages({
+  library(data.table)
   library(readr)
   library(ggplot2)
   library(knitr)
@@ -52,14 +62,14 @@ source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 source(file.path(repo_root, "workflow", "scripts", "diff_testing.R"))
 
-param <- SerialParam()
 ```
 
 ```{r}
 opts_chunk$set(
   fig.width = 5,
   fig.height = 5,
-  cache = TRUE,
+  cache = FALSE,
+  error = TRUE,
   include = TRUE,
   fig.path = "crc_windows_plots_sce/",
   dev = c("png", "svg"),
@@ -71,18 +81,27 @@ opts_chunk$set(
 
 
 ```{r}
-windows_sce <- readRDS(params$windows_sce)
-de          <- readRDS(params$de)
+windows_sce_path <- if (nzchar(params$windows_sce))
+                      params$windows_sce else
+                      file.path(params$out_dir, "sce_windows_colon.rds")
+de_path <- if (nzchar(params$de))
+             params$de else
+             file.path(params$out_dir, "de_list.rds")
+windows_sce <- readRDS(windows_sce_path)
+de <- readRDS(de_path)
 ```
 
 Let's get some basic stats about numbers of up/down, per comparison
 
 ```{r}
 summarize_contrast <- function(df, alpha = 0.05) {
-  sig <- df %>% filter(adj_p < alpha)
+  if (is.null(df) || nrow(df) == 0) {
+    return(tibble(total_significant = 0L, upregulated = 0L, downregulated = 0L))
+  }
+  sig <- df %>% filter(!is.na(adj_p), adj_p < alpha)
   tibble(
     total_significant = nrow(sig),
-    upregulated   = sum(sig$moderated_t >= 0, na.rm = TRUE),
+    upregulated = sum(sig$moderated_t >= 0, na.rm = TRUE),
     downregulated = sum(sig$moderated_t < 0, na.rm = TRUE)
   )
 }
@@ -124,7 +143,7 @@ ggplot(df_long, aes(x = contrast, y = count, fill = direction)) +
 Filter DE contrasts to those having NC as baseline.
 
 ```{r}
-de <- de[c('pt_vs_nc', 'ln_vs_nc', 'ml_vs_nc', 'mp_vs_nc')]
+de <- de[intersect(c('pt_vs_nc', 'ln_vs_nc', 'ml_vs_nc', 'mp_vs_nc'), names(de))]
 
 
 summary_table <- lapply(names(de), function(name) {
@@ -164,20 +183,22 @@ ggplot(df_long, aes(x = contrast, y = count, fill = direction)) +
 
 For plotting entropies: I cannot use the residuals of the fits above. But I can anyway fit a model on i_total vs avg meth and use the residuals, without patient or location covars, to do general plots. Sort of poor woman's corrected i_total.
 
-```{r}
-formula <- "sampen ~ meth + I(meth^2)"
+**TODO:** the `i_total_resid` assay built below (regression residuals) is *not* the same quantity as `i_norm` (the analytical `i_total / (k_max * H(p_hat))` used in simulations and eval scripts). Both decouple `i_total` from methylation, but via different math. See `TODO.md` -- harmonize on one canonical decoupling strategy across the dataset Rmds, the simulations, and the eval scripts.
 
-str(assay(windows_sce, 'sampen'))
+```{r}
+formula <- "i_total ~ meth + I(meth^2)"
+
+str(assay(windows_sce, 'i_total'))
 
 rowwise_lm_residuals <- function(i) {
-    df <- data.frame(
-        sampen  = assay(windows_sce, 'sampen')[i, ],
-        meth    = assay(windows_sce, 'meth')[i, ])
-
-    fit <- try(lm(formula, data = df), silent = TRUE)
-    if (inherits(fit, "try-error")) return(rep(NA, nrow(df)))
-    res <- residuals(fit)
-    return(res)
+  df <- data.frame(
+    i_total = assay(windows_sce, 'i_total')[i, ],
+    meth = assay(windows_sce, 'meth')[i, ]
+  )
+  ## na.action = na.exclude keeps residuals aligned to df rows (NA for skipped).
+  fit <- try(lm(formula, data = df, na.action = na.exclude), silent = TRUE)
+  if (inherits(fit, "try-error")) return(rep(NA_real_, nrow(df)))
+  as.numeric(residuals(fit))
 }
 
 res_mat <- do.call(rbind, bplapply(seq_len(nrow(windows_sce)), rowwise_lm_residuals,
@@ -186,7 +207,7 @@ res_mat <- do.call(rbind, bplapply(seq_len(nrow(windows_sce)), rowwise_lm_residu
 rownames(res_mat) <- rownames(windows_sce)
 colnames(res_mat) <- colnames(windows_sce)
 
-assay(windows_sce, "sampen_corrected") <- res_mat
+assay(windows_sce, "i_total_resid") <- res_mat
 
 colData(windows_sce)$location <- factor(
   colData(windows_sce)$location,
@@ -198,7 +219,7 @@ colData(windows_sce)$location <- factor(
 
 ```{r}
 
-df <- reshape2::melt(as.matrix(assay(windows_sce, "sampen_corrected")[,1:min(200, ncol(windows_sce))]))
+df <- reshape2::melt(as.matrix(assay(windows_sce, "i_total_resid")[,1:min(200, ncol(windows_sce))]))
 ggplot(df, aes(value)) + geom_density(fill="steelblue", alpha=0.5) +
   labs(title="Distribution of corrected i_total values (downsampled)") +
     theme_ng()
@@ -208,9 +229,9 @@ ggplot(df, aes(value)) + geom_density(fill="steelblue", alpha=0.5) +
 ```{r, fig.width = 8, fig.height = 4}
 
 df_violin <- data.frame(
-  value = colMeans(assay(windows_sce, "sampen_corrected")),
+  value = colMeans(assay(windows_sce, "i_total_resid")),
   location = colData(windows_sce)$location,
-  patient  = colData(windows_sce)$patient
+  patient = colData(windows_sce)$patient
 )
 
 ggplot(df_violin, aes(x = location, y = value)) +
@@ -224,13 +245,13 @@ ggplot(df_violin, aes(x = location, y = value)) +
 
 ```{r, fig.width = 8, fig.height = 4}
 df_cells <- data.frame(
-  mean_sampen = colMeans(assay(windows_sce, "sampen")),
-  mean_sampen_corrected = colMeans(assay(windows_sce, "sampen_corrected")),
+  mean_i_total = colMeans(assay(windows_sce, "i_total")),
+  mean_i_total_resid = colMeans(assay(windows_sce, "i_total_resid")),
   location = colData(windows_sce)$location,
   patient = colData(windows_sce)$patient
 )
 
-ggplot(df_cells, aes(x = mean_sampen, y = mean_sampen_corrected, color = location)) +
+ggplot(df_cells, aes(x = mean_i_total, y = mean_i_total_resid, color = location)) +
   geom_point(alpha = 0.8) +
   theme_ng() +
     facet_wrap(~patient) +
@@ -240,15 +261,69 @@ ggplot(df_cells, aes(x = mean_sampen, y = mean_sampen_corrected, color = locatio
 
 ```
 
-Row annotation (rowData) is re-read from the annotation file here because the SCE was built from a partial read in crc_windows.Rmd; the full annotation is loaded and assigned below.
+Row annotation is loaded from the windows_annotation TSV and merged onto the
+SCE's rowData. Annotation columns are binarised: any non-zero fractional
+overlap becomes 1.
 
-amet's window BED has only (chrom, start, end, feature_id) and so carries no per-window genomic-feature columns. The annotation reader is replaced with a no-op; binarized annotation columns and their downstream plots are not portable.
+```{r load_window_annotation_sce}
+load_window_annotation_sce <- function(path) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) {
+    return(data.frame())
+  }
+  tab <- tryCatch(
+    as.data.frame(fread(path, header = TRUE, sep = "\t")),
+    error = function(e) {
+      message("annotation read failed: ", conditionMessage(e))
+      data.frame()
+    })
+  if (nrow(tab) == 0) return(tab)
+  tab$region <- sprintf("%s:%s-%s", tab$chrom, tab$start, tab$end)
+  rownames(tab) <- tab$region
+  drop_cols <- c("chrom", "start", "end", "feature_id", "region")
+  tab[, setdiff(colnames(tab), drop_cols), drop = FALSE]
+}
 
+annot <- load_window_annotation_sce(params$windows_annotation)
+annotation_mat_ok <- ncol(annot) > 0 && nrow(annot) > 0
 
-```{r}
-## The annotation merge / binarization pipeline cannot run on amet's window
-## BED. Save the corrected SCE as-is.
+if (annotation_mat_ok) {
+  rd_existing <- as.data.frame(rowData(windows_sce))
+  rd_new <- annot[match(rownames(windows_sce), rownames(annot)), , drop = FALSE]
+  rownames(rd_new) <- rownames(windows_sce)
+  keep_existing <- setdiff(colnames(rd_existing), colnames(rd_new))
+  if (length(keep_existing) > 0) {
+    rd_new <- cbind(rd_new, rd_existing[, keep_existing, drop = FALSE])
+  }
+  rd_bin <- as.data.frame(lapply(rd_new, function(x) {
+    if (is.numeric(x)) as.integer(!is.na(x) & x > 0) else x
+  }))
+  colnames(rd_bin) <- paste0(colnames(rd_new), "_bin")
+  rd_combined <- cbind(rd_new, rd_bin)
+  rownames(rd_combined) <- rownames(windows_sce)
+  rowData(windows_sce) <- rd_combined
+}
 
+cat("annotation columns merged:", ncol(annot),
+    "| binarised columns:", if (annotation_mat_ok) sum(grepl("_bin$",
+      colnames(rowData(windows_sce)))) else 0, "\n")
+```
+
+Tag windows with the up/down significance from each differential-entropy contrast.
+
+```{r tag_de_directions}
+for (contrast in names(de)) {
+  cf <- de[[contrast]]$coefs_df
+  if (is.null(cf) || nrow(cf) == 0) next
+  up <- cf$region[!is.na(cf$adj_p) & cf$adj_p < 0.05 & cf$moderated_t >= 0]
+  down <- cf$region[!is.na(cf$adj_p) & cf$adj_p < 0.05 & cf$moderated_t < 0]
+  rowData(windows_sce)[, paste0(contrast, "_up_bin")] <- as.integer(
+    rownames(windows_sce) %in% up)
+  rowData(windows_sce)[, paste0(contrast, "_down_bin")] <- as.integer(
+    rownames(windows_sce) %in% down)
+}
+```
+
+```{r save_corrected_sce, cache = FALSE, error = FALSE}
 corrected_path <- if (nzchar(params$corrected_sce))
                     params$corrected_sce else
                     file.path(params$out_dir, "sce_windows_colon_corrected.rds")
@@ -256,13 +331,174 @@ dir.create(dirname(corrected_path), showWarnings = FALSE, recursive = TRUE)
 saveRDS(windows_sce, corrected_path)
 ```
 
-<!-- Section dropped: per-cell averages over binarized genomic-feature columns (genes, H3K27me3, SCNAs, HMM states, ...) contrasting up/down DE windows. amet's window BED carries none of these columns, so these plots cannot be reproduced. -->
+## Per-cell mean i_total_resid by annotation overlap (CRC01)
+
+Per cell, average corrected i_total over windows split by whether the feature
+is present (binary overlap == 1) or absent. CRC01 only so the SCNA columns are
+biologically meaningful.
+
+```{r mean_resid_by_annotation, fig.width = 11, fig.height = 4}
+if (annotation_mat_ok && "CRC01" %in% colData(windows_sce)$patient) {
+  crc01 <- windows_sce[, windows_sce$patient == "CRC01"]
+  assay_mat <- assay(crc01, "i_total_resid")
+
+  bin_features <- c("pmds_pmd_bin", "hmds_pmd_bin",
+                    "H3K27me3_chip_bin", "H3K9me3_chip_bin", "H3K4me3_chip_bin",
+                    "laminb1_lad_bin", "genes_genes_bin",
+                    "cpgIslandExt_cpgIslandExt_bin",
+                    "crc01_gain_scna_scna_bin", "crc01_lost_scna_scna_bin")
+  bin_features <- intersect(bin_features, colnames(rowData(crc01)))
+
+  if (length(bin_features) > 0) {
+    cells <- colnames(crc01)
+    df_list <- lapply(bin_features, function(bf) {
+      bin <- rowData(crc01)[[bf]]
+      m0 <- colMeans(assay_mat[bin == 0, , drop = FALSE], na.rm = TRUE)
+      m1 <- colMeans(assay_mat[bin == 1, , drop = FALSE], na.rm = TRUE)
+      data.frame(
+        cell = rep(cells, 2),
+        bin = rep(c(0, 1), each = length(cells)),
+        mean_i_total_resid = c(m0, m1),
+        feature = bf,
+        stringsAsFactors = FALSE
+      )
+    })
+    coldata_crc01 <- as.data.frame(colData(crc01))
+    coldata_crc01$cell <- colnames(crc01)
+    df_crc01 <- bind_rows(df_list) %>%
+      left_join(coldata_crc01[, c("cell", "location", "patient")],
+                by = "cell")
+    df_crc01$bin <- factor(df_crc01$bin, levels = c(0, 1))
+
+    print(
+      ggplot(df_crc01, aes(x = location, y = mean_i_total_resid,
+                           fill = factor(bin))) +
+        geom_violin(trim = FALSE, position = position_dodge(width = 0.8),
+                    alpha = 0.6) +
+        geom_jitter(aes(color = factor(bin)),
+                    position = position_jitterdodge(jitter.width = 0.3,
+                                                    dodge.width = 0.8),
+                    size = 0.5, alpha = 0.5) +
+        facet_wrap(~ feature, nrow = 2) +
+        labs(x = "biopsy location", y = "i_total_resid (cell mean)",
+             fill = "genomic context", color = "genomic context") +
+        theme_ng(base_size = 14)
+    )
+  }
+}
+```
+
+## Annotation overlap of differential-entropy windows (CRC01)
+
+```{r annotation_overlap_de, fig.width = 11, fig.height = 4}
+if (annotation_mat_ok && "CRC01" %in% colData(windows_sce)$patient) {
+  crc01 <- windows_sce[, windows_sce$patient == "CRC01"]
+  rd <- as.data.frame(rowData(crc01))
+  contrast_features <- grep("_(up|down)_bin$", colnames(rd), value = TRUE)
+  non_hmm <- c("pmds_pmd_bin", "hmds_pmd_bin",
+               "H3K27me3_chip_bin", "H3K9me3_chip_bin", "H3K4me3_chip_bin",
+               "laminb1_lad_bin", "genes_genes_bin",
+               "cpgIslandExt_cpgIslandExt_bin",
+               "crc01_gain_scna_scna_bin", "crc01_lost_scna_scna_bin")
+  non_hmm <- intersect(non_hmm, colnames(rd))
+  hmm_features <- grep("_hmm_bin$", colnames(rd), value = TRUE)
+
+  build_prop <- function(annot_features) {
+    if (length(annot_features) == 0 || length(contrast_features) == 0)
+      return(data.frame())
+    grid <- expand.grid(annotation = annot_features,
+                        contrast = contrast_features,
+                        stringsAsFactors = FALSE)
+    grid$proportion <- vapply(seq_len(nrow(grid)), function(i) {
+      ann_v <- rd[[grid$annotation[i]]]
+      ct_v <- as.logical(rd[[grid$contrast[i]]])
+      total <- sum(ct_v, na.rm = TRUE)
+      if (total == 0) NA_real_ else sum(ann_v == 1 & ct_v, na.rm = TRUE) / total
+    }, numeric(1))
+    grid <- grid[!is.na(grid$proportion), ]
+    grid$direction <- ifelse(grepl("_up_", grid$contrast), "Up", "Down")
+    grid$contrast_clean <- gsub("_(up|down)_bin$", "", grid$contrast)
+    grid$annotation <- gsub("_bin$", "", grid$annotation)
+    grid
+  }
+
+  plot_overlap <- function(df, title) {
+    ggplot(df, aes(x = contrast_clean, y = annotation)) +
+      geom_point(aes(size = proportion, color = direction)) +
+      scale_size(range = c(1, 6)) +
+      scale_color_manual(values = c("Up" = "#d95f02", "Down" = "#1b9e77")) +
+      facet_wrap(~ direction, nrow = 1) +
+      labs(x = "contrast", y = "annotation", size = "proportion",
+           color = "direction", title = title) +
+      theme_ng() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            axis.text = element_text(size = 7))
+  }
+
+  prop_non_hmm <- build_prop(non_hmm)
+  if (nrow(prop_non_hmm) > 0)
+    print(plot_overlap(prop_non_hmm,
+                       "Annotation overlap in diff i_total windows (non-HMM)"))
+  prop_hmm <- build_prop(hmm_features)
+  if (nrow(prop_hmm) > 0)
+    print(plot_overlap(prop_hmm,
+                       "Annotation overlap in diff i_total windows (HMM)"))
+}
+```
 
 # Aggregate by rowdata categories
 
-amet's window BED does not provide per-window genomic feature columns, so the aggregation (per-cell median i_total per genomic category, residual entropy after removing annotation effects) is dropped here.
+Per-cell median i_total_resid grouped by each binary annotation overlap column,
+appended back to colData.
 
-<!-- Section dropped: Aggregate by rowdata categories / per-cell residuals require binarized rowData annotation columns that amet's window BED does not provide. -->
+```{r aggregate_rowdata_categories, fig.width = 9, fig.height = 9}
+if (annotation_mat_ok) {
+  expr <- assay(windows_sce, "i_total_resid")
+  rd_bin_only <- as.data.frame(rowData(windows_sce))[, grep("_bin$",
+    colnames(rowData(windows_sce))), drop = FALSE]
+  rd_mat <- as.matrix(rd_bin_only)
+
+  cell_ann_median <- matrix(NA_real_, nrow = ncol(expr), ncol = ncol(rd_mat),
+                            dimnames = list(colnames(expr),
+                                            paste0(colnames(rd_mat), "_median")))
+  for (j in seq_len(ncol(rd_mat))) {
+    idx <- rd_mat[, j] == 1
+    if (sum(idx, na.rm = TRUE) > 0) {
+      cell_ann_median[, j] <- apply(expr[idx, , drop = FALSE], 2,
+                                    median, na.rm = TRUE)
+    }
+  }
+
+  colData(windows_sce) <- cbind(
+    colData(windows_sce),
+    as.data.frame(cell_ann_median)
+  )
+
+  df <- as.data.frame(colData(windows_sce))
+  ann <- grep("_bin_median$", colnames(df), value = TRUE)
+  if (length(ann) > 0) {
+    plot_df <- data.frame(
+      value = unlist(df[ann]),
+      annotation = rep(ann, each = nrow(df)),
+      location = rep(df$location, times = length(ann)),
+      stringsAsFactors = FALSE
+    )
+    print(
+      ggplot(plot_df, aes(x = location, y = value)) +
+        geom_boxplot(outlier.size = 0.5) +
+        facet_wrap(~ annotation, scales = "free_y") +
+        labs(x = "Tissue type",
+             y = "i_total_resid (median per annotation)",
+             title = "Per-cell i_total_resid across annotations and biopsy location") +
+        theme_ng() +
+        theme(strip.text = element_text(size = 7),
+              axis.text.x = element_text(angle = 45, hjust = 1))
+    )
+  }
+
+  saveRDS(windows_sce, corrected_path)
+}
+```
 
 ```{r}
 sessionInfo()

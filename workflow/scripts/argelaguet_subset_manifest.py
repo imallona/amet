@@ -44,12 +44,20 @@ sub = [
     and sanitize(r.get(lineage_col)) == args.lineage
 ]
 
-if sub:
-    for r in sub:
+def cell_size(row):
+    val = row.get("size")
+    if val not in (None, ""):
         try:
-            r["_size"] = os.path.getsize(r["path"])
-        except OSError:
-            r["_size"] = 0
+            return int(val)
+        except ValueError:
+            pass
+    try:
+        return os.path.getsize(row["path"])
+    except OSError:
+        return 0
+
+
+if sub:
     if len(sub) > args.max_cells:
         if plate_col:
             plate_groups = {}
@@ -57,7 +65,7 @@ if sub:
                 p = r.get(plate_col) or "_unknown"
                 plate_groups.setdefault(p, []).append(r)
             for p in plate_groups:
-                plate_groups[p].sort(key=lambda r: r["_size"], reverse=True)
+                plate_groups[p].sort(key=cell_size, reverse=True)
             picked = []
             order = sorted(plate_groups.keys())
             while len(picked) < args.max_cells and any(plate_groups.values()):
@@ -69,10 +77,10 @@ if sub:
                         break
             sub = picked
         else:
-            sub.sort(key=lambda r: r["_size"], reverse=True)
+            sub.sort(key=cell_size, reverse=True)
             sub = sub[: args.max_cells]
-    for r in sub:
-        r.pop("_size", None)
+    else:
+        sub.sort(key=cell_size, reverse=True)
 
 os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 with open(args.out, "w", newline="") as f:

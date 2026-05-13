@@ -9,10 +9,12 @@ use crate::features::Feature;
 use crate::reference::CpgReference;
 
 /// One feature's per-cell binary observation: one entry per reference CpG in the feature,
-/// either Some(0/1) if observed in this cell or None if missing.
+/// either Some(0/1) if observed in this cell or None if missing. `positions` mirrors
+/// `calls` and holds the 0-based CpG start coordinate for each slot.
 pub struct CellWindow<'a> {
     pub feature: &'a Feature,
     pub calls: Vec<Option<u8>>,
+    pub positions: &'a [u64],
 }
 
 impl<'a> CellWindow<'a> {
@@ -77,24 +79,26 @@ impl MarginalCounts {
 /// positions in the feature's `cpg_start_idx..cpg_end_idx` range.
 pub fn build_window<'a>(
     feature: &'a Feature,
-    reference: &CpgReference,
+    reference: &'a CpgReference,
     calls: &[MethCall],
     threshold: f64,
     min_reads: u32,
 ) -> CellWindow<'a> {
     let positions = &reference.positions[feature.chrom_id as usize];
-    let n = feature.cpg_end_idx - feature.cpg_start_idx;
+    let feature_positions = &positions[feature.cpg_start_idx..feature.cpg_end_idx];
+    let n = feature_positions.len();
     let mut window = vec![None; n];
 
     if n == 0 {
         return CellWindow {
             feature,
             calls: window,
+            positions: feature_positions,
         };
     }
 
-    let feature_start_pos = positions[feature.cpg_start_idx];
-    let feature_end_pos = positions[feature.cpg_end_idx - 1];
+    let feature_start_pos = feature_positions[0];
+    let feature_end_pos = feature_positions[n - 1];
 
     let lo = calls.partition_point(|c| (c.chrom_id, c.pos) < (feature.chrom_id, feature_start_pos));
     let hi = calls.partition_point(|c| (c.chrom_id, c.pos) <= (feature.chrom_id, feature_end_pos));
@@ -104,13 +108,13 @@ pub fn build_window<'a>(
         if call.chrom_id != feature.chrom_id {
             continue;
         }
-        while ref_idx < n && positions[feature.cpg_start_idx + ref_idx] < call.pos {
+        while ref_idx < n && feature_positions[ref_idx] < call.pos {
             ref_idx += 1;
         }
         if ref_idx >= n {
             break;
         }
-        if positions[feature.cpg_start_idx + ref_idx] == call.pos {
+        if feature_positions[ref_idx] == call.pos {
             if let Some(b) = call.binarize(threshold, min_reads) {
                 window[ref_idx] = Some(b);
             }
@@ -121,17 +125,22 @@ pub fn build_window<'a>(
     CellWindow {
         feature,
         calls: window,
+        positions: feature_positions,
     }
 }
 
-/// Count (X_i, X_{i+k}) pairs in a cell window for a single lag k.
-pub fn pair_counts(window: &CellWindow, lag: usize) -> PairCounts {
+/// Count (X_i, X_{i+k}) pairs in a cell window for a single lag k. Pairs whose genomic
+/// distance exceeds `max_distance` are skipped; pass 0 to disable the cap.
+pub fn pair_counts(window: &CellWindow, lag: usize, max_distance: u64) -> PairCounts {
     let mut pc = PairCounts::default();
     let n = window.calls.len();
     if lag == 0 || lag >= n {
         return pc;
     }
     for i in 0..(n - lag) {
+        if max_distance > 0 && window.positions[i + lag] - window.positions[i] > max_distance {
+            continue;
+        }
         if let (Some(a), Some(b)) = (window.calls[i], window.calls[i + lag]) {
             pc.counts[(a as usize) * 2 + b as usize] += 1;
         }
@@ -233,7 +242,7 @@ mod tests {
         ];
         let w = build_window(&f, &r, &calls, 0.0, 1);
         // calls = [1,1,_,0,0]; lag-1 pairs: (1,1), (0,0). (1,_) and (_,0) and (0,0) excluded.
-        let pc = pair_counts(&w, 1);
+        let pc = pair_counts(&w, 1, 0);
         // 11 (idx 3) = 1; 00 (idx 0) = 1.
         assert_eq!(pc.counts[3], 1);
         assert_eq!(pc.counts[0], 1);
@@ -278,7 +287,7 @@ mod tests {
         ];
         let w = build_window(&f, &r, &calls, 0.0, 1);
         // calls = [1,0,1,0,1]; lag-2 pairs: (1,1), (0,0), (1,1).
-        let pc = pair_counts(&w, 2);
+        let pc = pair_counts(&w, 2, 0);
         assert_eq!(pc.counts[3], 2); // (1,1)
         assert_eq!(pc.counts[0], 1); // (0,0)
     }
@@ -357,6 +366,90 @@ mod tests {
     }
 
     #[test]
+    fn max_distance_drops_far_pairs() {
+        let r = CpgReference {
+            chrom_names: vec!["chr1".into()],
+            chrom_id_of: [("chr1".into(), 0u32)].into_iter().collect(),
+            positions: vec![vec![10, 20, 1100]],
+        };
+        let f = Feature {
+            feature_id: "f".into(),
+            chrom_id: 0,
+            start: 0,
+            end: 2000,
+            cpg_start_idx: 0,
+            cpg_end_idx: 3,
+        };
+        let calls = vec![
+            MethCall {
+                chrom_id: 0,
+                pos: 10,
+                m: 1,
+                t: 1,
+            },
+            MethCall {
+                chrom_id: 0,
+                pos: 20,
+                m: 0,
+                t: 1,
+            },
+            MethCall {
+                chrom_id: 0,
+                pos: 1100,
+                m: 1,
+                t: 1,
+            },
+        ];
+        let w = build_window(&f, &r, &calls, 0.0, 1);
+        // lag-1: (10,20) distance 10, (20,1100) distance 1080.
+        // With cap=1000, only the (10,20) pair survives. Calls are (1,0) so index 2.
+        let pc = pair_counts(&w, 1, 1000);
+        assert_eq!(pc.counts[2], 1);
+        assert_eq!(pc.total(), 1);
+        // lag-2: (10,1100) distance 1090, dropped.
+        let pc2 = pair_counts(&w, 2, 1000);
+        assert_eq!(pc2.total(), 0);
+        // Disabled cap keeps all reachable pairs.
+        let pc_off = pair_counts(&w, 1, 0);
+        assert_eq!(pc_off.total(), 2);
+    }
+
+    #[test]
+    fn max_distance_boundary_inclusive() {
+        // Distance exactly equal to the cap is kept; one over is dropped.
+        let r = CpgReference {
+            chrom_names: vec!["chr1".into()],
+            chrom_id_of: [("chr1".into(), 0u32)].into_iter().collect(),
+            positions: vec![vec![0, 100]],
+        };
+        let f = Feature {
+            feature_id: "f".into(),
+            chrom_id: 0,
+            start: 0,
+            end: 200,
+            cpg_start_idx: 0,
+            cpg_end_idx: 2,
+        };
+        let calls = vec![
+            MethCall {
+                chrom_id: 0,
+                pos: 0,
+                m: 0,
+                t: 1,
+            },
+            MethCall {
+                chrom_id: 0,
+                pos: 100,
+                m: 1,
+                t: 1,
+            },
+        ];
+        let w = build_window(&f, &r, &calls, 0.0, 1);
+        assert_eq!(pair_counts(&w, 1, 100).total(), 1);
+        assert_eq!(pair_counts(&w, 1, 99).total(), 0);
+    }
+
+    #[test]
     fn lag_too_large_yields_zero_pairs() {
         let r = ref3();
         let f = feat_full();
@@ -375,7 +468,7 @@ mod tests {
             },
         ];
         let w = build_window(&f, &r, &calls, 0.0, 1);
-        let pc = pair_counts(&w, 10);
+        let pc = pair_counts(&w, 10, 0);
         assert_eq!(pc.total(), 0);
     }
 }

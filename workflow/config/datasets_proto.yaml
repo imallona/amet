@@ -1,0 +1,81 @@
+## Dataset analyses for amet -- PROTO config.
+##
+## Restricts CRC to a single patient and three locations, restricts Ecker to
+## a couple of MOp sub_types, and caps cells per (per-combo stratum, plate)
+## at prototype.cells_per_group. Outputs land in results/<dataset>_proto/.
+
+prototype:
+  enabled: true
+  cells_per_group: 10           # cap per per-combo stratum
+  features_subset: 200          # take first N intervals of each feature BED
+
+full:
+  max_cells_per_combo: 30       # unused in proto, kept so helpers can read it
+
+barbara:
+  host: barbara
+  user: imallona
+
+## Read-only data paths can be overridden to point directly at an existing
+## tree on barbara, skipping any sync/symlink. Defaults below (empty strings)
+## make the smk rules fall back to <results>/<dataset>/<subdir>, the local
+## layout populated by sync_from_barbara.sh.
+
+argelaguet:
+  group_column: lineage10x
+  meta_remote: /home/imallona/src/yamet/workflow/argelaguet/sample_metadata.txt
+  cpg_level_remote: /home/imallona/src/yamet/workflow/argelaguet/met/cpg_level
+  features_remote: /home/imallona/src/yamet/workflow/argelaguet/features/genomic_contexts
+  metadata_path: ""
+  cells_dir: ""
+  features_dir: ""
+  mm10_dir: ""
+  assembly: mm10
+  window_size: 500000
+  proto_stages:
+    - E5.5
+    - E6.5
+    - E7.5
+  proto_lineages:
+    - Epiblast
+    - Nascent_mesoderm
+    - Primitive_endoderm
+
+ecker:
+  group_column: sub_type
+  raw_remote: /home/imallona/src/yamet/workflow/data/brain/raw
+  meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/41586_2020_3182_MOESM9_ESM.xlsx
+  nemo_meta_remote: /home/imallona/src/yamet/workflow/data/brain/raw/MOp_Metadata.tsv.gz
+  raw_dir: ""
+  xlsx_path: ""
+  nemo_meta_path: ""
+  assembly: mm10
+  window_size: 10000
+  region_filter: MOp
+  proto_cell_types:
+    - "IT-L23 Cux1"
+    - "IT-L4 Shc3"
+  proto_regions:
+    - "4B"
+    - "5D"
+
+crc:
+  group_column: location
+  raw_remote: /home/imallona/src/yamet/workflow/data/crc/raw
+  raw_dir: ""
+  hg19_dir: ""
+  assembly: hg19
+  window_size: 10000
+  proto_patients:
+    - CRC01
+  proto_locations:
+    - NC
+    - PT
+    - LN
+
+amet:
+  i_max_lag: 3
+  min_cpgs_per_feature: 5
+  min_cells_per_group_proto: 2
+  min_cells_per_group_full: 10
+  meth_call_threshold: 0.1

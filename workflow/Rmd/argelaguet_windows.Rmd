@@ -132,7 +132,8 @@ ggplot(cell_df, aes(x = stage, y = mean_i_total, fill = stage)) +
 ```
 
 ```{r meth_vs_itotal, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
-ggplot(cell_df, aes(x = mean_meth, y = mean_i_total, color = stage)) +
+ggplot(cell_df[is.finite(mean_meth) & is.finite(mean_i_total)],
+       aes(x = mean_meth, y = mean_i_total, color = stage)) +
   geom_point(size = 0.5, alpha = 0.6) +
   scale_color_manual(values = c("E4.5" = "#440154", "E5.5" = "#31688e",
                                 "E6.5" = "#35b779", "E7.5" = "#fde725")) +
@@ -197,7 +198,7 @@ if (length(annotation_cols) == 0L) {
 if (length(annotation_cols) > 0L && exists("win_mean")) {
   long_rows <- lapply(annotation_cols, function(a) {
     frac <- win_mean[[a]]
-    in_ann <- !is.na(frac) & frac > 0.5
+    in_ann <- !is.na(frac) & frac > 0.5 & is.finite(win_mean$mean_i_total)
     if (sum(in_ann) < 5L) return(NULL)
     data.frame(annotation = a,
                i_total = win_mean$mean_i_total[in_ann])

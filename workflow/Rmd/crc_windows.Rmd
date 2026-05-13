@@ -394,12 +394,24 @@ i_total_list <- bplapply(i_total_list, \(x) {
 ```
 
 
+```{r jsd_panel_helpers}
+## Cap each per-panel scatter at PANEL_MAX rows to keep SVG output bounded.
+## jsd_long is per-(window, patient, location) and easily has millions of rows
+## genome-wide; the visual purpose is the point cloud, so a random subset is
+## faithful.
+PANEL_MAX <- 50000L
+panel_subsample <- function(df) {
+  if (nrow(df) <= PANEL_MAX) return(df)
+  df[sample.int(nrow(df), PANEL_MAX), ]
+}
+```
+
 ## By location - jsd
 
 ```{r, fig.width = 10, fig.height = 10}
 par(mfrow = c(3, 2), pty = "s")
 for (loc in levels(jsd_long$location)) {
-  tmp <- jsd_long[jsd_long$location == loc, ]
+  tmp <- panel_subsample(jsd_long[jsd_long$location == loc, ])
   if (nrow(tmp) == 0) next
   plot(jsd ~ avg_meth, col = as.numeric(as.factor(tmp$location)), pch = ".", data = tmp, main = loc)
 }
@@ -411,7 +423,7 @@ for (loc in levels(jsd_long$location)) {
 ```{r, fig.width = 10, fig.height = 10}
 par(mfrow = c(3, 3), pty = "s")
 for (patient in levels(jsd_long$patient)) {
-  tmp <- jsd_long[jsd_long$patient == patient, ]
+  tmp <- panel_subsample(jsd_long[jsd_long$patient == patient, ])
   if (nrow(tmp) == 0) next
   plot(jsd ~ avg_meth, col = as.numeric(as.factor(tmp$location)), pch = ".", data = tmp, main = patient[1])
 }
@@ -422,9 +434,10 @@ for (patient in levels(jsd_long$patient)) {
 ```{r, fig.width = 8, fig.height = 11}
 par(mfrow = c(4, 4), pty = "s")
 for (patient in levels(jsd_long$patient)) {
-  tmp <- jsd_long[jsd_long$patient == patient, ]
-  for (loc in unique(tmp$location)) {
-    tmp <- jsd_long[jsd_long$patient == patient & jsd_long$location == loc, ]
+  for (loc in unique(jsd_long$location[jsd_long$patient == patient])) {
+    tmp <- panel_subsample(
+      jsd_long[jsd_long$patient == patient & jsd_long$location == loc, ]
+    )
     if (nrow(tmp) == 0) next
     plot(jsd ~ avg_meth,
       col = as.numeric(as.factor(tmp$location)),
@@ -436,9 +449,12 @@ for (patient in levels(jsd_long$patient)) {
 
 # Stats
 
-## Manual PT vs NC contrast
+## Data prep for differential testing
 
-Reread everything from scratch; this duplicates what `diff_entropy_test()` produces for the `pt_vs_nc` contrast below. Kept for now until the downstream heatmap is rewired.
+`process_reports2` builds the per-cell, per-window i_total and methylation
+matrices, summarises them per (patient, sub-location) group, and applies a
+50% row-NA filter. The result feeds every contrast in `diff_entropy_test()`
+below.
 
 ```{r}
 process_reports2 <- function(cf_fp) {
@@ -563,142 +579,6 @@ if (length(nc_cols) > 0) {
 }
 ```
 
-
-Let's do a window-wise i_total vs meth with loc and patient, regardless of the annotation of the window. Mind the quadratic meth term (not sure what for).
-
-```{r,  fig.width = 5, fig.height = 5}
-rowwise_lm <- function(i) {
-  df <- data.frame(
-    i_total = sub_i_total[i, ],
-    meth = sub_meth[i, ],
-    loc = factor(substr(groups$subloc, 1, 2)),
-    patient = groups$patient
-  )
-  df$loc <- relevel(df$loc, ref = "NC")
-
-  fit <- try(lm(i_total ~ meth + I(meth^2) + loc + patient, data = df), silent = T)
-  s <- summary(fit)$coefficients
-
-  if (!("locPT" %in% rownames(s))) {
-    return(rep(NA, 5))
-  }
-
-  c(
-    estimate = s["locPT", "Estimate"],
-    std_error = s["locPT", "Std. Error"],
-    t_value = s["locPT", "t value"],
-    p_value = s["locPT", "Pr(>|t|)"],
-    df = df.residual(fit)
-  )
-}
-
-coefs_list <- bplapply(seq_len(nrow(sub_i_total)), rowwise_lm, BPPARAM = param)
-
-coefs_df <- do.call(rbind, coefs_list)
-colnames(coefs_df) <- c("estimate", "std_error", "t_value", "p_value", "df")
-coefs_df <- as.data.frame(coefs_df)
-
-
-coefs_df[] <- lapply(coefs_df, as.numeric)
-
-valid <- complete.cases(coefs_df)
-coefs_valid <- coefs_df[valid, ]
-
-s2 <- coefs_valid$std_error^2
-df_resid <- coefs_valid$df
-squeezed <- squeezeVar(var = s2, df = df_resid)
-
-moderated_t <- coefs_valid$estimate / sqrt(squeezed$var.post)
-moderated_p <- 2 * pt(-abs(moderated_t), df = squeezed$df.prior + df_resid)
-adj_p <- p.adjust(moderated_p, method = "BH")
-
-coefs_valid$moderated_t <- moderated_t
-coefs_valid$moderated_p <- moderated_p
-coefs_valid$adj_p <- adj_p
-
-coefs_df$moderated_t <- NA
-coefs_df$moderated_p <- NA
-coefs_df$adj_p <- NA
-coefs_df[
-  valid, c("moderated_t", "moderated_p", "adj_p")
-] <- coefs_valid[, c("moderated_t", "moderated_p", "adj_p")]
-
-
-coefs_df$region <- rownames(sub_i_total)
-
-saveRDS(object = coefs_df, 'pt_vs_nc_manual_coefs.rds')
-
-table(coefs_df$adj_p < 0.05)
-hist(coefs_df$adj_p)
-
-sorted_idx <- order(coefs_df$adj_p, na.last = NA)
-
-top_2k_idx <- sorted_idx[1:min(2000, length(sorted_idx))]
-
-top_entropy <- sub_i_total[top_2k_idx, ]
-top_meth <- sub_meth[top_2k_idx, ]
-```
-
-
-## Heatmap including differentially entropic windows
-
-Rows are restricted to the top 2000 windows by BH-adjusted p-value from the PT vs NC
-comparison (meth + location + patient model), then further to complete cases across all
-biopsy groups. Clustering all ~300k windows genome-wide is not tractable.
-Columns are biopsy groups (patient x location), annotated at the top.
-
-Right-hand row annotation carries the differential-entropy flag plus the
-binarised per-window genomic-feature overlaps when those columns are present
-in the SCE rowData.
-
-```{r, fig.width = 16, fig.height = 10}
-stopifnot(all(rownames(top_entropy) == rownames(top_meth)))
-
-cc_top <- complete.cases(top_entropy) & complete.cases(top_meth)
-top_entropy_cc <- top_entropy[cc_top, , drop = FALSE]
-top_meth_cc <- top_meth[cc_top, , drop = FALSE]
-coefs_df_top <- coefs_df[top_2k_idx[cc_top], ]
-
-if (nrow(top_entropy_cc) >= 2) {
-  row.hc <- hclust(dist(top_entropy_cc), method = "ward.D2")
-
-  column_ha <- HeatmapAnnotation(
-    location = substr(groups$subloc, 1, 2),
-    patient = groups$patient
-  )
-
-  row_ann_df <- data.frame(
-    diff_i_total_sig = coefs_df_top$adj_p < 0.05
-  )
-  if (ncol(annot) > 0 && nrow(annot) > 0) {
-    overlay <- annot[coefs_df_top$region, , drop = FALSE]
-    overlay[] <- lapply(overlay, function(x) {
-      if (is.numeric(x)) as.integer(!is.na(x) & x > 0) else x
-    })
-    row_ann_df <- cbind(row_ann_df, overlay)
-  }
-  row_ha <- rowAnnotation(tile_annotation = as.matrix(row_ann_df))
-
-  draw(Heatmap(top_entropy_cc,
-    name = "i_total",
-    top_annotation = column_ha,
-    right_annotation = row_ha,
-    show_row_names = FALSE,
-    show_column_names = FALSE,
-    cluster_columns = FALSE,
-    cluster_rows = row.hc
-  ) + Heatmap(top_meth_cc,
-    name = "DNA methylation",
-    col = colorRamp2(c(0, 1), c("white", "black")),
-    show_row_names = FALSE,
-    show_column_names = FALSE,
-    cluster_columns = FALSE,
-    cluster_rows = row.hc
-  ))
-} else {
-  message("differential heatmap: fewer than 2 complete-case windows, skipping")
-}
-```
 
 # jsd vs i_total per-window summaries {.tabset .tabset-pills}
 
@@ -828,6 +708,67 @@ if (any(is.finite(de$pt_vs_nc$coefs_df$adj_p))) hist(de$pt_vs_nc$coefs_df$adj_p)
 table(de$pt_vs_nc$coefs_df$adj_p < 0.05)
 ```
 
+### Heatmap of top differentially entropic windows (PT vs NC)
+
+Rows are the top 2000 windows by BH-adjusted p-value, then restricted to
+complete cases across all biopsy groups. Columns are biopsy groups
+(patient x sub-location), annotated at the top. Right-hand row annotation
+carries the differential-entropy flag plus the binarised per-window
+genomic-feature overlaps when those columns are present.
+
+```{r ptnc_heatmap, fig.width = 16, fig.height = 10}
+top_entropy <- de$pt_vs_nc$top_entropy
+top_meth <- de$pt_vs_nc$top_meth
+coefs_df <- de$pt_vs_nc$coefs_df
+
+stopifnot(all(rownames(top_entropy) == rownames(top_meth)))
+
+cc_top <- complete.cases(top_entropy) & complete.cases(top_meth)
+top_entropy_cc <- top_entropy[cc_top, , drop = FALSE]
+top_meth_cc <- top_meth[cc_top, , drop = FALSE]
+coefs_df_top <- coefs_df[match(rownames(top_entropy_cc), coefs_df$region), ]
+
+if (nrow(top_entropy_cc) >= 2) {
+  row.hc <- hclust(dist(top_entropy_cc), method = "ward.D2")
+
+  column_ha <- HeatmapAnnotation(
+    location = substr(groups$subloc, 1, 2),
+    patient = groups$patient
+  )
+
+  row_ann_df <- data.frame(
+    diff_i_total_sig = coefs_df_top$adj_p < 0.05
+  )
+  if (ncol(annot) > 0 && nrow(annot) > 0) {
+    overlay <- annot[coefs_df_top$region, , drop = FALSE]
+    overlay[] <- lapply(overlay, function(x) {
+      if (is.numeric(x)) as.integer(!is.na(x) & x > 0) else x
+    })
+    row_ann_df <- cbind(row_ann_df, overlay)
+  }
+  row_ha <- rowAnnotation(tile_annotation = as.matrix(row_ann_df))
+
+  draw(Heatmap(top_entropy_cc,
+    name = "i_total",
+    top_annotation = column_ha,
+    right_annotation = row_ha,
+    show_row_names = FALSE,
+    show_column_names = FALSE,
+    cluster_columns = FALSE,
+    cluster_rows = row.hc
+  ) + Heatmap(top_meth_cc,
+    name = "DNA methylation",
+    col = colorRamp2(c(0, 1), c("white", "black")),
+    show_row_names = FALSE,
+    show_column_names = FALSE,
+    cluster_columns = FALSE,
+    cluster_rows = row.hc
+  ))
+} else {
+  message("differential heatmap: fewer than 2 complete-case windows, skipping")
+}
+```
+
 ## LN vs PT
 
 
@@ -846,7 +787,7 @@ de$ln_vs_pt <- diff_entropy_test(
 )
 
 head(de$ln_vs_pt$coefs_df)
-hist(de$ln_vs_pt$coefs_df$p_value)
+if (any(is.finite(de$ln_vs_pt$coefs_df$p_value))) hist(de$ln_vs_pt$coefs_df$p_value)
 table(de$ln_vs_pt$coefs_df$adj_p < 0.05)
 ```
 
@@ -866,7 +807,7 @@ de$ln_vs_nc <- diff_entropy_test(
   out_file = "ln_vs_nc_coefs.rds"
 )
 
-hist(de$ln_vs_nc$coefs_df$p_value)
+if (any(is.finite(de$ln_vs_nc$coefs_df$p_value))) hist(de$ln_vs_nc$coefs_df$p_value)
 table(de$ln_vs_nc$coefs_df$adj_p < 0.05)
 ```
 
@@ -886,7 +827,7 @@ de$ml_vs_ln <- diff_entropy_test(
   out_file = "ml_vs_ln_coefs.rds"
 )
 
-hist(de$ml_vs_ln$coefs_df$p_value)
+if (any(is.finite(de$ml_vs_ln$coefs_df$p_value))) hist(de$ml_vs_ln$coefs_df$p_value)
 table(de$ml_vs_ln$coefs_df$adj_p < 0.05)
 ```
 
@@ -907,7 +848,7 @@ de$ml_vs_nc <- diff_entropy_test(
   out_file = "ml_vs_nc_coefs.rds"
 )
 
-hist(de$ml_vs_nc$coefs_df$p_value)
+if (any(is.finite(de$ml_vs_nc$coefs_df$p_value))) hist(de$ml_vs_nc$coefs_df$p_value)
 table(de$ml_vs_nc$coefs_df$adj_p < 0.05)
 ```
 
@@ -927,7 +868,7 @@ de$mp_vs_ml <- diff_entropy_test(
   out_file = "mp_vs_ml_coefs.rds"
 )
 
-hist(de$mp_vs_ml$coefs_df$p_value)
+if (any(is.finite(de$mp_vs_ml$coefs_df$p_value))) hist(de$mp_vs_ml$coefs_df$p_value)
 table(de$mp_vs_ml$coefs_df$adj_p < 0.05)
 ```
 
@@ -947,7 +888,7 @@ de$mp_vs_nc <- diff_entropy_test(
   out_file = "mp_vs_nc_coefs.rds"
 )
 
-hist(de$mp_vs_nc$coefs_df$p_value)
+if (any(is.finite(de$mp_vs_nc$coefs_df$p_value))) hist(de$mp_vs_nc$coefs_df$p_value)
 table(de$mp_vs_nc$coefs_df$adj_p < 0.05)
 ```
 

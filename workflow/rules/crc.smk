@@ -266,9 +266,10 @@ rule crc_stage_annotation_bed:
 
 
 rule crc_window_annotation_per_pair:
-    """Per-window overlap fraction with one annotation BED. Column 7 of
-    `bedtools coverage` is the fraction of bases in column A covered by column B.
-    Output is a single-column file with header `<subcat>_<cat>`."""
+    """Per-window overlap fraction with one annotation BED. For a 4-column BED
+    `-a`, `bedtools coverage` appends count, bases_covered, length_A, and
+    fraction; the fraction is column 8. Output is a single-column file with
+    header `<subcat>_<cat>`."""
     wildcard_constraints:
         subcat = _CRC_SUBCAT_RE,
         cat = _CRC_CAT_RE,
@@ -288,7 +289,7 @@ rule crc_window_annotation_per_pair:
         mkdir -p $(dirname {output.frac})
         (
           echo "{wildcards.subcat}_{wildcards.cat}"
-          bedtools coverage -a {input.windows} -b {input.ann} | cut -f7
+          bedtools coverage -a {input.windows} -b {input.ann} | cut -f8
         ) > {output.frac} 2> {log}
         """
 

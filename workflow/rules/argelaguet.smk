@@ -280,10 +280,10 @@ rule run_amet_on_argelaguet_features:
 
 
 rule argelaguet_window_annotation_per_annotation:
-    """Per-window fractional coverage by one annotation. bedtools coverage's
-    7th column is the fraction of the window covered by features in the
-    annotation BED. Header line carries the annotation name so the combine
-    step can paste columns by position."""
+    """Per-window fractional coverage by one annotation. For a 4-column BED
+    `-a`, `bedtools coverage` appends count, bases_covered, length_A, and
+    fraction; the fraction is column 8. Header line carries the annotation
+    name so the combine step can paste columns by position."""
     conda:
         op.join("..", "envs", "bedtools.yml")
     wildcard_constraints:
@@ -301,7 +301,7 @@ rule argelaguet_window_annotation_per_annotation:
         mkdir -p $(dirname {output.frac})
         {{
           echo "{wildcards.annotation}"
-          bedtools coverage -a {input.windows} -b {input.annotation} | cut -f7
+          bedtools coverage -a {input.windows} -b {input.annotation} | cut -f8
         }} > {output.frac} 2> {log}
         """
 

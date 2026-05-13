@@ -278,9 +278,11 @@ rule ecker_stage_annotation_bed:
 
 
 rule ecker_window_annotation_per_annotation:
-    """Fraction of each window covered by one annotation's intervals.
-    Produces a single-column file with header == {annotation} so columns
-    can be paste-merged downstream."""
+    """Fraction of each window covered by one annotation's intervals. For a
+    4-column BED `-a`, `bedtools coverage` appends count, bases_covered,
+    length_A, and fraction; the fraction is column 8. Produces a
+    single-column file with header == {annotation} so columns can be
+    paste-merged downstream."""
     wildcard_constraints:
         annotation = "|".join(_ECKER_ALL_ANN_NAMES),
     conda:
@@ -298,7 +300,7 @@ rule ecker_window_annotation_per_annotation:
         mkdir -p $(dirname {output.frac})
         {{
           echo "{wildcards.annotation}"
-          bedtools coverage -a {input.windows} -b {input.annotation} | cut -f7
+          bedtools coverage -a {input.windows} -b {input.annotation} | cut -f8
         }} > {output.frac} 2> {log}
         """
 

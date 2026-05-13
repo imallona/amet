@@ -159,7 +159,8 @@ ggplot(cell_df, aes(x = cell_class, y = mean_i_total, fill = cell_class)) +
 ```
 
 ```{r meth_vs_itotal, fig.width = ng_fig_size(4, 1)$w, fig.height = ng_fig_size(4, 1)$h}
-ggplot(cell_df, aes(x = mean_meth, y = mean_i_total, color = cell_class)) +
+ggplot(cell_df[is.finite(mean_meth) & is.finite(mean_i_total)],
+       aes(x = mean_meth, y = mean_i_total, color = cell_class)) +
   geom_point(size = 0.4, alpha = 0.5) +
   scale_color_manual(values = ecker_cell_class_pal) +
   guides(color = guide_legend(override.aes = list(size = 2, alpha = 1), ncol = 2)) +
@@ -208,7 +209,8 @@ if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
     write.csv(df_ann, "ecker_windows_per_cell_by_annotation.csv", row.names = FALSE)
 
     print(
-      ggplot(df_ann, aes(x = cell_class, y = mean_i_total, fill = bin)) +
+      ggplot(df_ann[is.finite(mean_i_total)],
+             aes(x = cell_class, y = mean_i_total, fill = bin)) +
         geom_boxplot(outlier.size = 0.2, position = position_dodge(width = 0.8)) +
         scale_fill_manual(values = c("0" = "#bbbbbb", "1" = "#d95f02"),
                           name = "overlaps annotation") +

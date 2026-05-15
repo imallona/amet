@@ -71,7 +71,8 @@ pub struct Cli {
     pub min_cells_per_group: u32,
 
     /// Maximum CpG lag k for the I_total within-cell score: I_total = sum_{k=1..max} I_k.
-    #[arg(long, default_value_t = 3)]
+    /// Must be at least 1; lag 1 is required to compute JSD.
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
     pub i_max_lag: u32,
 
     /// Maximum nucleotide distance allowed between paired CpGs. Pairs whose genomic

@@ -306,10 +306,10 @@ struct CellFeatureRow {
     pair_tables: Vec<PairCounts>,
 }
 
-fn write_headers<W: Write>(
-    cf_writer: &mut W,
-    feat_writer: &mut W,
-    pair_writer: &mut W,
+fn write_headers(
+    cf_writer: &mut dyn Write,
+    feat_writer: &mut dyn Write,
+    pair_writer: &mut dyn Write,
     i_max_lag: u32,
 ) -> std::io::Result<()> {
     write!(
@@ -331,22 +331,19 @@ fn write_headers<W: Write>(
     Ok(())
 }
 
-/// Derive a stable label for a BED path: strip `.bed.gz`, `.bed`, or `.gz`,
+/// Derive a stable label for a BED path: strip a compressed-BED extension if any,
 /// otherwise use the file name as-is. Used to disambiguate output paths when
-/// multiple --features are supplied.
+/// multiple --features are supplied. The list of suffixes mirrors what
+/// `crate::io::open_read` accepts as compressed input.
 fn features_label(path: &Path) -> String {
     let raw = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "features".to_string());
-    if let Some(s) = raw.strip_suffix(".bed.gz") {
-        return s.to_string();
-    }
-    if let Some(s) = raw.strip_suffix(".bed") {
-        return s.to_string();
-    }
-    if let Some(s) = raw.strip_suffix(".gz") {
-        return s.to_string();
+    for suffix in [".bed.gz", ".bed.bgz", ".bed", ".gz", ".bgz"] {
+        if let Some(s) = raw.strip_suffix(suffix) {
+            return s.to_string();
+        }
     }
     raw
 }
@@ -415,6 +412,19 @@ mod tests {
         assert_eq!(
             features_label(Path::new("/x/mm10.heterochromatin.bed")),
             "mm10.heterochromatin"
+        );
+    }
+
+    #[test]
+    fn label_strips_bed_bgz() {
+        assert_eq!(features_label(Path::new("/x/regions.bed.bgz")), "regions");
+    }
+
+    #[test]
+    fn label_strips_bgz_only() {
+        assert_eq!(
+            features_label(Path::new("/x/regions.tsv.bgz")),
+            "regions.tsv"
         );
     }
 }

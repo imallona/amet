@@ -431,6 +431,36 @@ fn multi_features_writes_one_triplet_per_set() {
 }
 
 #[test]
+fn cli_rejects_zero_i_max_lag() {
+    // --i-max-lag 0 leaves pair_tables empty, which would later panic on JSD aggregation.
+    // The CLI is the right place to reject this; assert the binary exits non-zero.
+    let dir = tempdir().unwrap();
+    let cpgs = write_file(dir.path(), "cpgs.tsv", "chr1\t9\n");
+    let bed = write_file(dir.path(), "f.bed", "chr1\t0\t100\tx\n");
+    let cells = write_file(dir.path(), "c.tsv", "cell_id\tgroup\tpath\n");
+    let prefix = dir.path().join("p");
+    let status = Command::new(binary_path())
+        .args([
+            "--cpg-reference",
+            cpgs.to_str().unwrap(),
+            "--features",
+            bed.to_str().unwrap(),
+            "--cells",
+            cells.to_str().unwrap(),
+            "--output-prefix",
+            prefix.to_str().unwrap(),
+            "--i-max-lag",
+            "0",
+        ])
+        .status()
+        .expect("running amet binary");
+    assert!(
+        !status.success(),
+        "expected non-zero exit when --i-max-lag is 0"
+    );
+}
+
+#[test]
 fn multi_features_rejects_duplicate_basenames() {
     // Two BEDs whose basenames collapse to the same label must be rejected.
     let dir = tempdir().unwrap();

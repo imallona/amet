@@ -6,37 +6,65 @@
 use super::shannon_entropy;
 use crate::kmer::PairCounts;
 
+/// Streaming accumulator for multi-distribution JSD.
+///
+/// Folds one cell's lag-1 2-mer histogram at a time, so per-cell counts need
+/// not be retained for the whole group. Holds a running sum of normalised
+/// distributions and of per-cell entropies; both terms of the JSD are means
+/// over cells, so they accumulate exactly.
+#[derive(Debug, Clone, Default)]
+pub struct JsdAccumulator {
+    mixture_sum: [f64; 4],
+    entropy_sum: f64,
+    n: u64,
+}
+
+impl JsdAccumulator {
+    /// Fold one cell's lag-1 2-mer counts. Cells with no pairs are ignored,
+    /// matching the non-empty filter in `multi_jsd`.
+    pub fn add(&mut self, cell: &PairCounts) {
+        let total = cell.total();
+        if total == 0 {
+            return;
+        }
+        let t = total as f64;
+        let mut p = [0.0f64; 4];
+        for (k, slot) in p.iter_mut().enumerate() {
+            *slot = cell.counts[k] as f64 / t;
+            self.mixture_sum[k] += *slot;
+        }
+        self.entropy_sum += entropy_of_distribution(&p);
+        self.n += 1;
+    }
+
+    /// JSD = H(mean P_i) - mean H(P_i). Returns 0 with fewer than 2 non-empty cells.
+    pub fn finish(&self) -> f64 {
+        if self.n < 2 {
+            return 0.0;
+        }
+        let n = self.n as f64;
+        let mixture = [
+            self.mixture_sum[0] / n,
+            self.mixture_sum[1] / n,
+            self.mixture_sum[2] / n,
+            self.mixture_sum[3] / n,
+        ];
+        let jsd = entropy_of_distribution(&mixture) - self.entropy_sum / n;
+        if jsd < 0.0 { 0.0 } else { jsd }
+    }
+}
+
 /// Multi-distribution generalised JSD (in bits, using log base 2).
 ///
 /// JSD(P_1, ..., P_n) = H(mean P_i) - mean H(P_i).
 ///
 /// Returns 0 when fewer than 2 cells have non-zero histograms.
 pub fn multi_jsd(per_cell: &[PairCounts]) -> f64 {
-    let nonempty: Vec<&PairCounts> = per_cell.iter().filter(|c| c.total() > 0).collect();
-    if nonempty.len() < 2 {
-        return 0.0;
+    let mut acc = JsdAccumulator::default();
+    for cell in per_cell {
+        acc.add(cell);
     }
-
-    // Per-cell normalised distributions and their entropies.
-    let mut h_avg = 0.0;
-    let mut mixture = [0.0f64; 4];
-    for cell in &nonempty {
-        let n = cell.total() as f64;
-        let mut p = [0.0; 4];
-        for k in 0..4 {
-            p[k] = cell.counts[k] as f64 / n;
-            mixture[k] += p[k];
-        }
-        h_avg += entropy_of_distribution(&p);
-    }
-    let n_cells = nonempty.len() as f64;
-    h_avg /= n_cells;
-    for v in &mut mixture {
-        *v /= n_cells;
-    }
-    let h_mix = entropy_of_distribution(&mixture);
-    let jsd = h_mix - h_avg;
-    if jsd < 0.0 { 0.0 } else { jsd }
+    acc.finish()
 }
 
 fn entropy_of_distribution(p: &[f64]) -> f64 {
@@ -117,5 +145,30 @@ mod tests {
         let close = vec![pc(50, 25, 15, 10), pc(48, 27, 16, 9)];
         let far = vec![pc(50, 25, 15, 10), pc(10, 15, 25, 50)];
         assert!(multi_jsd(&far) > multi_jsd(&close));
+    }
+
+    #[test]
+    fn accumulator_matches_multi_jsd() {
+        // The streaming accumulator must yield bit-identical results to the
+        // slice-based multi_jsd, since the workflow relies on the streaming path.
+        let cases: Vec<Vec<PairCounts>> = vec![
+            vec![pc(10, 10, 10, 10), pc(20, 20, 20, 20), pc(5, 5, 5, 5)],
+            vec![pc(50, 25, 15, 10), pc(10, 15, 25, 50), pc(0, 0, 0, 0)],
+            vec![pc(10, 0, 0, 0), pc(0, 10, 0, 0), pc(0, 0, 10, 0)],
+            vec![pc(7, 3, 1, 9)],
+            vec![],
+        ];
+        for case in &cases {
+            let mut acc = JsdAccumulator::default();
+            for c in case {
+                acc.add(c);
+            }
+            assert_eq!(
+                acc.finish(),
+                multi_jsd(case),
+                "accumulator diverged from multi_jsd on {:?}",
+                case
+            );
+        }
     }
 }

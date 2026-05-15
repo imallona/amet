@@ -66,19 +66,21 @@ opts_chunk$set(
 These are amet feature TSVs (per (subcat, cat, patient, location) combo). Per-cell `i_total` from cell_feature.tsv.gz captures within-cell heterogeneity; per-feature `jsd` from feature.tsv.gz captures across-cell heterogeneity.
 
 ```{r, import_short_reports}
-## Filename layout: <subcat>_<cat>_<patient>_<location>.{cell_feature,feature}.tsv.gz
-## subcat may itself contain underscores (e.g., 0_Enhancer, crc01_nc_scna), so
-## we pin location, patient and cat to the last three tokens and let subcat
-## absorb the rest.
+## Filename layout: <patient>_<location>.<subcat>.<cat>.{cell_feature,feature}.tsv.gz
+## amet writes one triplet per --features BED; the label is the staged BED
+## basename <subcat>.<cat>. patient and location are single tokens with no dot
+## or underscore, joined by "_"; subcat may contain underscores (e.g.,
+## 0_Enhancer, crc01_nc_scna) but neither subcat nor cat contains a dot.
 parse_combo_base <- function(base) {
-  parts <- strsplit(base, "_", fixed = TRUE)[[1]]
-  n <- length(parts)
-  stopifnot(n >= 4)
+  parts <- strsplit(base, ".", fixed = TRUE)[[1]]
+  stopifnot(length(parts) == 3)
+  combo <- strsplit(parts[1], "_", fixed = TRUE)[[1]]
+  stopifnot(length(combo) == 2)
   list(
-    subcat = paste(parts[seq_len(n - 3)], collapse = "_"),
-    cat = parts[n - 2],
-    patient = parts[n - 1],
-    location = parts[n]
+    subcat = parts[2],
+    cat = parts[3],
+    patient = combo[1],
+    location = combo[2]
   )
 }
 

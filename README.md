@@ -95,8 +95,8 @@ Tunable variables:
 | Variable | Default | Description |
 |---|---|---|
 | `MODE` | `proto` | `proto` or `full`; picks `workflow/config/datasets_$(MODE).yaml` |
-| `CORES` | 16 | Snakemake `--cores` value |
-| `ULIMIT_KB` | 209715200 (200 GB) | Virtual-memory cap; inherited by every amet job |
+| `CORES` | 40 | Snakemake `--cores` value |
+| `ULIMIT_KB` | 104857600 (100 GB) | Per-process virtual-memory cap, inherited by every amet job shell. Not a shared budget: each of the `CORES` concurrent jobs is capped independently. |
 | `CONDA_ENV` | `snakemake` | Conda env that holds snakemake |
 | `CONDA_INIT` | `~/miniconda3/bin/activate` | Conda activation script |
 
@@ -125,7 +125,7 @@ The three dataset rule files expand over a fixed list of annotations defined at 
 
 ### Server deployment
 
-The Makefile is designed for a workstation with enough RAM for the whole-genome amet runs (hundreds of GB virtual memory under parallel jobs; the recipes apply `ulimit -v` as a soft cap). It is not designed for laptops.
+The Makefile is designed for a workstation with enough RAM for the whole-genome amet runs. The recipes apply `ulimit -v` as a soft per-process cap (`ULIMIT_KB`, default 100 GB); it is inherited by every job shell and bounds each amet process independently, so peak machine memory is roughly `CORES` times one job's actual usage, not the cap. Each amet job scores all of a dataset's annotation BEDs in one pass, so its footprint grows with the total number of features across those BEDs. It is not designed for laptops.
 
 If you are in the Mark Robinson lab at UZH, `workflow/scripts/internal/setup_barbara_links.sh` populates `results/<dataset>/{cells,raw,features,mm10,hg19}` as symlinks to the pre-staged data tree on `barbara`'s filesystem. See `workflow/scripts/internal/README.md`. Outside that lab, run the per-dataset download rules in each `.smk` instead.
 
@@ -136,7 +136,7 @@ If you are in the Mark Robinson lab at UZH, `workflow/scripts/internal/setup_bar
 | `--genome` | (required, mutually exclusive with `--cpg-reference`) | FASTA of the reference genome. amet derives all CpG positions on first use and caches them to `<fasta>.cpg`. |
 | `--cpg-reference` | (required, mutually exclusive with `--genome`) | Tab-separated `chrom\tpos` of every CpG, 0-based. Defines adjacency: an uncovered reference CpG breaks 2-mer pairing across it. |
 | `--cells` | (required unless `--build-cpg-only`) | Manifest TSV (see below). |
-| `--features` | (required unless `--build-cpg-only`) | BED of regions to score. Features must not overlap. |
+| `--features` | (required unless `--build-cpg-only`) | BED of regions to score. Features within a BED must not overlap. Pass `--features` multiple times to score against several BEDs in one cell-read pass; see "Multiple feature sets" below. |
 | `--output-prefix` | (required unless `--build-cpg-only`) | Prefix for the output files. |
 | `--build-cpg-only` | off | Only materialise `<fasta>.cpg` and exit. Requires `--genome`. |
 | `--group-column` | `group` | Manifest column to use as the group label. |
@@ -144,7 +144,7 @@ If you are in the Mark Robinson lab at UZH, `workflow/scripts/internal/setup_bar
 | `--min-reads-per-cpg` | `1` | A CpG is observed only if covered by at least this many reads. Bulk WGBS users typically set 5-10. |
 | `--min-cpgs-per-feature` | `5` | A `(cell, feature)` is scored only if at least this many CpGs are covered. Below the threshold, scores are reported as `NA`. |
 | `--min-cells-per-group` | `10` | A `(feature, group)` reports `jsd` only if at least this many cells pass the per-cell coverage filter. Otherwise `jsd` is `NA`. |
-| `--i-max-lag` | `3` | Maximum CpG lag k for `I_total = sum_{k=1..max} I_k`. |
+| `--i-max-lag` | `3` | Maximum CpG lag k for `I_total = sum_{k=1..max} I_k`. Must be at least 1; lag 1 underpins JSD. |
 | `--max-pair-distance` | `0` (off) | Maximum nucleotide distance allowed between two CpGs of a pair. Pairs whose genomic distance exceeds this value are not counted, at any lag. `0` disables the cap. |
 | `--threads` | `0` (all) | Number of threads. |
 
@@ -188,6 +188,35 @@ chr2    34
 chr1    1000    2000    promoter_GENE1
 chr1    5000    7000    cgi_chr1_5000
 ```
+
+### Multiple feature sets
+
+`--features` can be passed more than once to score the same cells against several BEDs in a single run, so each cell file is parsed only once regardless of how many feature sets are used. This is the recommended way to compare, for example, promoters, enhancers, and heterochromatin in one pass.
+
+```
+amet \
+  --genome mm10.fa \
+  --cells cells.tsv \
+  --features promoters.bed \
+  --features enhancers.bed \
+  --features heterochromatin.bed \
+  --output-prefix run1
+```
+
+With a single `--features` the output paths are exactly as documented above (`run1.cell_feature.tsv.gz`, etc.). With two or more, amet writes one output triplet per BED, keyed by the BED basename:
+
+```
+run1.promoters.cell_feature.tsv.gz
+run1.promoters.feature.tsv.gz
+run1.promoters.pair_counts.tsv.gz
+run1.enhancers.cell_feature.tsv.gz
+run1.enhancers.feature.tsv.gz
+run1.enhancers.pair_counts.tsv.gz
+run1.heterochromatin.cell_feature.tsv.gz
+...
+```
+
+The label is the BED file name with any of `.bed.gz`, `.bed.bgz`, `.bed`, `.gz`, or `.bgz` stripped. If two BEDs resolve to the same label (for example `regions.bed` in two different directories), amet exits with an error before doing any work; rename one of the inputs.
 
 ### Outputs
 

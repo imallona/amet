@@ -385,9 +385,15 @@ def _ecker_combo_cell_tsvs(wildcards):
 
 
 rule run_amet_on_ecker_features:
-    """Run amet on one (annotation, region, sub_type) combo."""
+    """Run amet once per (region, sub_type) combo across every annotation BED.
+    Each BED is passed as a separate --features so the cell files are parsed
+    only once for the whole annotation panel. amet writes a cell_feature,
+    feature, and pair_counts file per BED, keyed by the BED basename (the
+    annotation name); this rule declares the cell_feature and feature files
+    as tracked outputs."""
     wildcard_constraints:
-        annotation = "|".join(_ECKER_ALL_ANN_NAMES),
+        region = r"[^_.]+",
+        sub_type = r"[^_.]+",
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
@@ -397,18 +403,21 @@ rule run_amet_on_ecker_features:
         cell_files = _ecker_combo_cell_tsvs,
         genome = op.join(REFS, "mm10_ensembl", "genome.fa"),
         cpg = op.join(REFS, "mm10_ensembl", "genome.fa.cpg"),
-        bed = op.join(ECKER_RUN, "beds", "{annotation}.bed"),
+        beds = [op.join(ECKER_RUN, "beds", f"{ann}.bed")
+                for ann in _ECKER_ALL_ANN_NAMES],
     output:
-        cell_feature = op.join(
-            ECKER_RUN, "features",
-            "{annotation}_{region}_{sub_type}.cell_feature.tsv.gz"),
-        feature = op.join(
-            ECKER_RUN, "features",
-            "{annotation}_{region}_{sub_type}.feature.tsv.gz"),
+        cell_feature = [
+            op.join(ECKER_RUN, "features",
+                    "{region}_{sub_type}." + f"{ann}.cell_feature.tsv.gz")
+            for ann in _ECKER_ALL_ANN_NAMES],
+        feature = [
+            op.join(ECKER_RUN, "features",
+                    "{region}_{sub_type}." + f"{ann}.feature.tsv.gz")
+            for ann in _ECKER_ALL_ANN_NAMES],
     params:
-        prefix = op.join(
-            ECKER_RUN, "features",
-            "{annotation}_{region}_{sub_type}"),
+        prefix = op.join(ECKER_RUN, "features", "{region}_{sub_type}"),
+        features_flags = lambda w, input: " ".join(
+            f"--features {b}" for b in input.beds),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
         min_cells = min_cells_per_group(),
@@ -416,14 +425,14 @@ rule run_amet_on_ecker_features:
     threads: min(workflow.cores, 4)
     log:
         op.join(ECKER_RUN, "logs",
-                "amet_{annotation}_{region}_{sub_type}.log"),
+                "amet_features_{region}_{sub_type}.log"),
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} \
             --genome {input.genome} \
             --cells {input.cells} \
-            --features {input.bed} \
+            {params.features_flags} \
             --output-prefix {params.prefix} \
             --i-max-lag {params.i_max_lag} \
             --min-cpgs-per-feature {params.min_cpgs} \
@@ -493,12 +502,12 @@ def _ecker_combos():
 def list_ecker_features_outputs(wildcards):
     combos = _ecker_combos()
     out = []
-    for ann in _ECKER_ALL_ANN_NAMES:
-        for sr, st in combos:
+    for sr, st in combos:
+        for ann in _ECKER_ALL_ANN_NAMES:
             out.append(op.join(ECKER_RUN, "features",
-                               f"{ann}_{sr}_{st}.cell_feature.tsv.gz"))
+                               f"{sr}_{st}.{ann}.cell_feature.tsv.gz"))
             out.append(op.join(ECKER_RUN, "features",
-                               f"{ann}_{sr}_{st}.feature.tsv.gz"))
+                               f"{sr}_{st}.{ann}.feature.tsv.gz"))
     return out
 
 

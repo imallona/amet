@@ -18,7 +18,7 @@ set -euo pipefail
 YAMET="${YAMET:-$HOME/src/yamet/workflow}"
 YAMET_HG19_CURATED="${YAMET_HG19_CURATED:-$HOME/src/yamet/hg19}"
 
-repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
 res="$repo_root/results"
 
 link() {

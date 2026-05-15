@@ -12,9 +12,17 @@ pub struct Cli {
     #[arg(long, value_name = "TSV", required_unless_present = "build_cpg_only")]
     pub cells: Option<PathBuf>,
 
-    /// BED file of features to score. Features should not overlap.
-    #[arg(long, value_name = "BED", required_unless_present = "build_cpg_only")]
-    pub features: Option<PathBuf>,
+    /// BED file of features to score. Features within a single BED should not overlap.
+    /// Pass --features multiple times to score the same cells against several feature
+    /// sets in one cell-read pass; each set writes its own output triplet keyed by the
+    /// BED basename. With a single --features the output paths are unchanged.
+    #[arg(
+        long,
+        value_name = "BED",
+        action = clap::ArgAction::Append,
+        required_unless_present = "build_cpg_only"
+    )]
+    pub features: Vec<PathBuf>,
 
     /// FASTA of the reference genome. amet derives all CpG positions from it on first
     /// use and caches them to <fasta>.cpg next to the input. Subsequent runs reuse the
@@ -63,7 +71,8 @@ pub struct Cli {
     pub min_cells_per_group: u32,
 
     /// Maximum CpG lag k for the I_total within-cell score: I_total = sum_{k=1..max} I_k.
-    #[arg(long, default_value_t = 3)]
+    /// Must be at least 1; lag 1 is required to compute JSD.
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
     pub i_max_lag: u32,
 
     /// Maximum nucleotide distance allowed between paired CpGs. Pairs whose genomic

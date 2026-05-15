@@ -17,8 +17,9 @@ pub fn open_read(path: &Path) -> Result<Box<dyn BufRead>> {
     }
 }
 
-/// Open a file for writing, gzipping if the path ends with .gz.
-pub fn open_write(path: &Path) -> Result<Box<dyn Write>> {
+/// Open a file for writing, gzipping if the path ends with .gz. The returned
+/// writer is `Send` so it can be shared across worker threads behind a `Mutex`.
+pub fn open_write(path: &Path) -> Result<Box<dyn Write + Send>> {
     let file = File::create(path)?;
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
     if ext == "gz" {

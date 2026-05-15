@@ -15,7 +15,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 dataset="$1"
-repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
 config="$repo_root/workflow/config/datasets.yaml"
 out_root="$repo_root/results/$dataset"
 mkdir -p "$out_root/cells" "$out_root/features"

@@ -114,12 +114,13 @@ sanitize <- function(x) gsub("[ ._]", "-", x)
 recover_annotation <- function(fid) sub("_\\d+$", "", fid)
 
 ## Filename parsers:
-##   filename = "<annotation>_<stage>_<lineage>.cell_feature.tsv.gz"
-##   annotation may itself contain hyphens; stage and lineage are the trailing
-##   two underscore-separated tokens before the extension.
-get_annotation <- function(fn) sub("^(.*)_[^_]+_[^_]+\\..*$", "\\1", fn)
-get_stage <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$", "\\1", fn)
-get_lineage <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$", "\\1", fn)
+##   filename = "<stage>_<lineage>.<annotation>.cell_feature.tsv.gz"
+##   amet writes one triplet per --features BED; the label is the BED basename
+##   (the annotation). annotation may contain hyphens; stage and lineage are
+##   sanitized (gsub '[ ._]' '-'). None of the three contains '_' or '.'.
+get_annotation <- function(fn) sub("^[^_.]+_[^_.]+\\.([^_.]+)\\..*$", "\\1", fn)
+get_stage <- function(fn) sub("^([^_.]+)_[^_.]+\\..*$", "\\1", fn)
+get_lineage <- function(fn) sub("^[^_.]+_([^_.]+)\\..*$", "\\1", fn)
 ```
 
 ```{r load_metadata}

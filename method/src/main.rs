@@ -2,7 +2,7 @@ use amet::cli::Cli;
 use amet::features::read_features;
 use amet::genome::ensure_cpg_index;
 use amet::io::open_write;
-use amet::kmer::{PairCounts, build_window, marginal_counts, pair_counts};
+use amet::kmer::{PairCounts, build_window, marginal_counts, pair_counts_all_lags};
 use amet::manifest::read_manifest;
 use amet::parsers::{CellFormat, read_cell};
 use amet::reference::read_cpg_reference;
@@ -109,9 +109,8 @@ fn main() -> Result<()> {
                 );
                 let n_cov = window.n_observed() as u32;
                 let mc = marginal_counts(&window);
-                let pair_tables: Vec<PairCounts> = (1..=i_max_lag)
-                    .map(|lag| pair_counts(&window, lag, cli.max_pair_distance))
-                    .collect();
+                let pair_tables: Vec<PairCounts> =
+                    pair_counts_all_lags(&window, i_max_lag, cli.max_pair_distance);
                 let mean = window.mean_meth();
                 let i_per_lag: Vec<f64> =
                     pair_tables.iter().map(amet::scores::i_total::i_k).collect();

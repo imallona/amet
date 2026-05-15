@@ -114,18 +114,35 @@ fn snapshot_matches_golden() {
     let cf_golden = fs::read_to_string(&cf_golden_path).unwrap();
     let feat_golden = fs::read_to_string(&feat_golden_path).unwrap();
 
+    // amet scores cells in parallel and writes cell_feature/pair_counts rows in
+    // a cell-interleaved order that depends on thread scheduling, so the row
+    // *set* is the stable thing, not the line order. Compare with the header
+    // pinned and the data rows sorted; this still catches any value, schema, or
+    // formatting drift. (feature.tsv is already written sorted, so this is a
+    // no-op for it.)
     assert_eq!(
-        cf_actual,
-        cf_golden,
+        normalize(&cf_actual),
+        normalize(&cf_golden),
         "cell_feature output drifted vs golden at {}.\n\
          To accept the new output, rerun with UPDATE_SNAPSHOTS=1.",
         cf_golden_path.display()
     );
     assert_eq!(
-        feat_actual,
-        feat_golden,
+        normalize(&feat_actual),
+        normalize(&feat_golden),
         "feature output drifted vs golden at {}.\n\
          To accept the new output, rerun with UPDATE_SNAPSHOTS=1.",
         feat_golden_path.display()
     );
+}
+
+/// Keep the header as the first line, sort the data rows. Lets the comparison
+/// ignore the (thread-scheduling dependent) row order while still catching any
+/// change to the row contents.
+fn normalize(s: &str) -> String {
+    let mut lines: Vec<&str> = s.lines().collect();
+    if lines.len() > 1 {
+        lines[1..].sort_unstable();
+    }
+    lines.join("\n")
 }

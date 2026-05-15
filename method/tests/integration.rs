@@ -99,11 +99,18 @@ fn end_to_end_two_cells_one_feature_allc() {
     assert!(header.contains("i_1"));
 
     // The 010101 cell should have higher i_total than the 011010 cell.
-    let row_a: Vec<&str> = lines[1].split('\t').collect();
-    let row_b: Vec<&str> = lines[2].split('\t').collect();
+    // Rows are looked up by cell_id (column 0): cell_feature row order is
+    // cell-interleaved and not guaranteed to follow the manifest.
     let i_total_col = header.split('\t').position(|h| h == "i_total").unwrap();
-    let a_score: f64 = row_a[i_total_col].parse().unwrap();
-    let b_score: f64 = row_b[i_total_col].parse().unwrap();
+    let score_of = |cell_id: &str| -> f64 {
+        let row = lines[1..]
+            .iter()
+            .find(|l| l.split('\t').next() == Some(cell_id))
+            .unwrap_or_else(|| panic!("no cell_feature row for cell {}", cell_id));
+        row.split('\t').nth(i_total_col).unwrap().parse().unwrap()
+    };
+    let a_score = score_of("A");
+    let b_score = score_of("B");
     assert!(
         a_score > b_score,
         "010101 (A) should have higher i_total than 011010 (B); got {} vs {}",

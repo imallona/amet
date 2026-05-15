@@ -12,6 +12,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 fn main() -> Result<()> {
     let cli = Cli::parse_args();
@@ -67,7 +68,8 @@ fn main() -> Result<()> {
     let single_set = cli.features.len() == 1;
 
     let mut sets: Vec<FeatureSet> = Vec::with_capacity(cli.features.len());
-    let mut outputs: Vec<SetOutputs> = Vec::with_capacity(cli.features.len());
+    let mut sinks: Vec<Mutex<SetSink>> = Vec::with_capacity(cli.features.len());
+    let mut feat_writers: Vec<Box<dyn Write + Send>> = Vec::with_capacity(cli.features.len());
     for (path, label) in cli.features.iter().zip(labels.iter()) {
         eprintln!("[amet] reading features: {}", path.display());
         let features = read_features(path, &reference).context("reading features")?;
@@ -92,16 +94,16 @@ fn main() -> Result<()> {
         sets.push(FeatureSet {
             label: label.clone(),
             features,
-        });
-        outputs.push(SetOutputs {
             cf_path,
             feat_path,
             pair_path,
+        });
+        sinks.push(Mutex::new(SetSink {
             cf_writer,
-            feat_writer,
             pair_writer,
             agg: HashMap::new(),
-        });
+        }));
+        feat_writers.push(feat_writer);
     }
 
     eprintln!("[amet] reading manifest: {}", cells_path.display());
@@ -121,13 +123,14 @@ fn main() -> Result<()> {
     let i_max_lag = cli.i_max_lag as usize;
     let min_n = cli.min_cpgs_per_feature;
 
-    // Stream per cell: each cell file is read once and scored against every
-    // feature set. Its cell_feature and pair_counts rows are written out and
-    // dropped immediately, so peak memory stays near one (cell, set) batch
-    // rather than the full cells x sets x features matrix. Feature-level
-    // aggregates are folded incrementally (Welford for mean/variance,
-    // JsdAccumulator for jsd), so no per-cell values are retained.
-    for cell in &manifest {
+    // Score cells in parallel. Each cell file is read once and scored against
+    // every feature set; its cell_feature/pair_counts rows are formatted into a
+    // thread-local buffer, then a brief per-set lock flushes the buffer and
+    // folds the streaming aggregates. Nothing accumulates across cells, so peak
+    // memory stays near `threads * one (cell, set) batch`. cell_feature and
+    // pair_counts row order is therefore cell-interleaved; consumers key by
+    // cell_id, and feature.tsv below is written in a sorted order.
+    manifest.par_iter().try_for_each(|cell| -> Result<()> {
         let format = match cell.format.as_deref() {
             Some(s) => {
                 CellFormat::parse(s).unwrap_or_else(|| CellFormat::detect_from_path(&cell.path))
@@ -138,7 +141,7 @@ fn main() -> Result<()> {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("[amet] error reading {}: {}", cell.path.display(), e);
-                continue;
+                return Ok(());
             }
         };
         // Every cell's group was interned from this same manifest above.
@@ -147,11 +150,11 @@ fn main() -> Result<()> {
             .position(|g| g == &cell.group)
             .expect("cell group interned from manifest") as u32;
 
-        for (set, out) in sets.iter().zip(outputs.iter_mut()) {
-            // Score this cell's features in parallel; collect preserves feature order.
+        for (set, sink) in sets.iter().zip(sinks.iter()) {
+            // Cells are the parallel axis, so features are scored sequentially.
             let rows: Vec<CellFeatureRow> = set
                 .features
-                .par_iter()
+                .iter()
                 .map(|feature| {
                     let window = build_window(
                         feature,
@@ -178,11 +181,21 @@ fn main() -> Result<()> {
                 })
                 .collect();
 
+            // Format outside the lock so the critical section is just the
+            // buffered write and the aggregate fold.
+            let mut cf_buf: Vec<u8> = Vec::new();
+            let mut pair_buf: Vec<u8> = Vec::new();
+            for row in &rows {
+                write_cell_feature_row(&mut cf_buf, cell, row, min_n, i_max_lag)?;
+                write_pair_count_rows(&mut pair_buf, cell, row)?;
+            }
+
+            let mut guard = sink.lock().expect("sink mutex poisoned");
+            guard.cf_writer.write_all(&cf_buf)?;
+            guard.pair_writer.write_all(&pair_buf)?;
             for (feat_idx, row) in rows.iter().enumerate() {
-                write_cell_feature_row(&mut out.cf_writer, cell, row, min_n, i_max_lag)?;
-                write_pair_count_rows(&mut out.pair_writer, cell, row)?;
                 if row.n_covered >= min_n {
-                    let e = out.agg.entry((feat_idx as u32, group_id)).or_default();
+                    let e = guard.agg.entry((feat_idx as u32, group_id)).or_default();
                     e.cov_sum += row.n_covered as u64;
                     e.n_cells += 1;
                     if let Some(m) = row.mean_meth {
@@ -193,15 +206,18 @@ fn main() -> Result<()> {
                 }
             }
         }
-    }
+        Ok(())
+    })?;
 
     // Feature-level aggregates per set, written sorted by (feature_id, group).
     // Aggregates are keyed by integer indices; reconstruct the names here and
     // sort lexically so the output order is stable and independent of the
     // HashMap iteration order. The feature index breaks ties so the order is
     // fully determined even if two features share a feature_id.
-    for (set, out) in sets.iter().zip(outputs.iter_mut()) {
-        let mut keys: Vec<(u32, u32)> = out.agg.keys().copied().collect();
+    for ((set, sink), feat_writer) in sets.iter().zip(sinks).zip(feat_writers.iter_mut()) {
+        let agg = sink.into_inner().expect("sink mutex poisoned").agg;
+        let w: &mut dyn Write = &mut **feat_writer;
+        let mut keys: Vec<(u32, u32)> = agg.keys().copied().collect();
         keys.sort_by(|a, b| {
             let ka = (
                 set.features[a.0 as usize].feature_id.as_str(),
@@ -216,7 +232,7 @@ fn main() -> Result<()> {
             ka.cmp(&kb)
         });
         for key in keys {
-            let e = &out.agg[&key];
+            let e = &agg[&key];
             let feature_id = set.features[key.0 as usize].feature_id.as_str();
             let group = group_names[key.1 as usize].as_str();
             let mean_cov = if e.n_cells > 0 {
@@ -230,28 +246,28 @@ fn main() -> Result<()> {
                 None
             };
             write!(
-                out.feat_writer,
+                w,
                 "{}\t{}\t{}\t{:.6}\t",
                 feature_id, group, e.n_cells, mean_cov
             )?;
-            write_opt(&mut out.feat_writer, e.meth.mean())?;
-            write!(out.feat_writer, "\t")?;
-            write_opt(&mut out.feat_writer, e.meth.var())?;
-            write!(out.feat_writer, "\t")?;
-            write_opt(&mut out.feat_writer, e.itotal.mean())?;
-            write!(out.feat_writer, "\t")?;
-            write_opt(&mut out.feat_writer, e.itotal.var())?;
-            write!(out.feat_writer, "\t")?;
-            write_opt(&mut out.feat_writer, jsd)?;
-            writeln!(out.feat_writer)?;
+            write_opt(w, e.meth.mean())?;
+            write!(w, "\t")?;
+            write_opt(w, e.meth.var())?;
+            write!(w, "\t")?;
+            write_opt(w, e.itotal.mean())?;
+            write!(w, "\t")?;
+            write_opt(w, e.itotal.var())?;
+            write!(w, "\t")?;
+            write_opt(w, jsd)?;
+            writeln!(w)?;
         }
 
         eprintln!(
             "[amet] done {}: wrote {}, {}, {}",
             set.label,
-            out.cf_path.display(),
-            out.feat_path.display(),
-            out.pair_path.display()
+            set.cf_path.display(),
+            set.feat_path.display(),
+            set.pair_path.display()
         );
     }
     Ok(())
@@ -354,15 +370,17 @@ fn write_pair_count_rows(
 struct FeatureSet {
     label: String,
     features: Vec<Feature>,
-}
-
-struct SetOutputs {
     cf_path: PathBuf,
     feat_path: PathBuf,
     pair_path: PathBuf,
-    cf_writer: Box<dyn Write>,
-    feat_writer: Box<dyn Write>,
-    pair_writer: Box<dyn Write>,
+}
+
+/// Per-set mutable state shared across the parallel cell workers behind a
+/// `Mutex`. The feature.tsv writer is not here: it is touched only before and
+/// after the parallel section, never concurrently.
+struct SetSink {
+    cf_writer: Box<dyn Write + Send>,
+    pair_writer: Box<dyn Write + Send>,
     /// Keyed by (feature index within the set, interned group id) so the hot
     /// per-row fold does not allocate a fresh key string each time.
     agg: HashMap<(u32, u32), AggEntry>,

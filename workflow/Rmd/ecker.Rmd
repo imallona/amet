@@ -70,12 +70,14 @@ knitr::opts_chunk$set(
 Mouse (mm10), CpG context only.
 
 ```{r helpers}
-## filenames: {annotation}_{region}_{sub_type}.*.gz
-## annotation has no underscores; neither do region or sub_type values
-get_annotation <- function(fn) sub("^(.*)_[^_]+_[^_]+\\..*$", "\\1", fn)
-## Slab axis (e.g. 2C/3C/4B/5D), second-to-last filename token.
-get_region <- function(fn) sub("^.*_([^_]+)_[^_]+\\..*$", "\\1", fn)
-get_sub_type <- function(fn) sub("^.*_([^_.]+)\\.[^_]*$",   "\\1", fn)
+## filenames: {region}_{sub_type}.{annotation}.*.gz
+## amet writes one triplet per --features BED; the label is the BED basename
+## (the annotation). region, sub_type and annotation contain no underscores
+## or dots.
+get_annotation <- function(fn) sub("^[^_.]+_[^_.]+\\.([^_.]+)\\..*$", "\\1", fn)
+## Slab axis (e.g. 2C/3C/4B/5D), the first filename token.
+get_region <- function(fn) sub("^([^_.]+)_[^_.]+\\..*$", "\\1", fn)
+get_sub_type <- function(fn) sub("^[^_.]+_([^_.]+)\\..*$", "\\1", fn)
 
 ann_labels <- c(
   "genes"    = "Genes",

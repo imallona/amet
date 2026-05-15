@@ -231,11 +231,14 @@ rule chr19_sizes:
 
 
 rule run_amet_on_argelaguet_features:
-    """Run amet on one (annotation, stage, lineage) combo. Wildcards:
-    {annotation, stage, lineage}, where stage and lineage are sanitized
-    strings (gsub '[ ._]' '-')."""
+    """Run amet once per (stage, lineage) combo across every annotation BED.
+    Each BED is passed as a separate --features so the cell files are parsed
+    only once for the whole annotation panel. amet writes one output triplet
+    per BED, keyed by the BED basename (the annotation name). stage and
+    lineage are sanitized strings (gsub '[ ._]' '-')."""
     wildcard_constraints:
-        annotation = "|".join(_ALL_ARGELAGUET_ANN_NAMES),
+        stage = r"[^_.]+",
+        lineage = r"[^_.]+",
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
@@ -243,33 +246,35 @@ rule run_amet_on_argelaguet_features:
         cells = op.join(ARG_DATA, "manifests", "{stage}_{lineage}.tsv"),
         genome = op.join(REFS, "mm10_ucsc", "genome.fa"),
         cpg = op.join(REFS, "mm10_ucsc", "genome.fa.cpg"),
-        bed = op.join(ARG_RUN, "beds", "{annotation}.bed"),
+        beds = [op.join(ARG_RUN, "beds", f"{ann}.bed")
+                for ann in _ALL_ARGELAGUET_ANN_NAMES],
     output:
-        cell_feature = op.join(
-            ARG_RUN, "features",
-            "{annotation}_{stage}_{lineage}.cell_feature.tsv.gz"),
-        feature = op.join(
-            ARG_RUN, "features",
-            "{annotation}_{stage}_{lineage}.feature.tsv.gz"),
+        cell_feature = [
+            op.join(ARG_RUN, "features",
+                    "{stage}_{lineage}." + f"{ann}.cell_feature.tsv.gz")
+            for ann in _ALL_ARGELAGUET_ANN_NAMES],
+        feature = [
+            op.join(ARG_RUN, "features",
+                    "{stage}_{lineage}." + f"{ann}.feature.tsv.gz")
+            for ann in _ALL_ARGELAGUET_ANN_NAMES],
     params:
-        prefix = op.join(
-            ARG_RUN, "features",
-            "{annotation}_{stage}_{lineage}"),
+        prefix = op.join(ARG_RUN, "features", "{stage}_{lineage}"),
+        features_flags = lambda w, input: " ".join(
+            f"--features {b}" for b in input.beds),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
         min_cells = min_cells_per_group(),
         thresh = config["amet"]["meth_call_threshold"],
     threads: min(workflow.cores, 4)
     log:
-        op.join(ARG_RUN, "logs",
-                "amet_{annotation}_{stage}_{lineage}.log"),
+        op.join(ARG_RUN, "logs", "amet_features_{stage}_{lineage}.log"),
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} \
             --genome {input.genome} \
             --cells {input.cells} \
-            --features {input.bed} \
+            {params.features_flags} \
             --output-prefix {params.prefix} \
             --i-max-lag {params.i_max_lag} \
             --min-cpgs-per-feature {params.min_cpgs} \
@@ -400,15 +405,15 @@ def _argelaguet_combos():
 
 
 def list_argelaguet_features_outputs(wildcards):
-    """All (annotation x stage x lineage) amet output files."""
+    """All (stage x lineage x annotation) amet output files."""
     combos = _argelaguet_combos()
     out = []
-    for ann in _ALL_ARGELAGUET_ANN_NAMES:
-        for stage, lineage in combos:
+    for stage, lineage in combos:
+        for ann in _ALL_ARGELAGUET_ANN_NAMES:
             out.append(op.join(ARG_RUN, "features",
-                               f"{ann}_{stage}_{lineage}.cell_feature.tsv.gz"))
+                               f"{stage}_{lineage}.{ann}.cell_feature.tsv.gz"))
             out.append(op.join(ARG_RUN, "features",
-                               f"{ann}_{stage}_{lineage}.feature.tsv.gz"))
+                               f"{stage}_{lineage}.{ann}.feature.tsv.gz"))
     return out
 
 

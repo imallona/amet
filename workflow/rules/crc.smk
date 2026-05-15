@@ -328,10 +328,13 @@ rule crc_combine_window_annotations:
 
 
 rule run_amet_on_crc_features:
-    """Run amet on one (subcat, cat, patient, location) combo."""
+    """Run amet once per (patient, location) combo across every annotation BED.
+    Each BED is passed as a separate --features, so the cell files are parsed
+    only once for the whole annotation panel. amet writes one output triplet
+    per BED, keyed by the staged BED basename <subcat>.<cat>."""
     wildcard_constraints:
-        subcat = _CRC_SUBCAT_RE,
-        cat = _CRC_CAT_RE,
+        patient = r"[^_.]+",
+        location = r"[^_.]+",
     conda:
         op.join("..", "envs", "bedtools.yml")
     input:
@@ -340,18 +343,21 @@ rule run_amet_on_crc_features:
                         "{patient}_{location}.tsv"),
         genome = op.join(REFS, "hg19_ucsc", "genome.fa"),
         cpg = op.join(REFS, "hg19_ucsc", "genome.fa.cpg"),
-        bed = op.join(CRC_RUN, "beds", "{subcat}.{cat}.bed"),
+        beds = [op.join(CRC_RUN, "beds", f"{sc}.{c}.bed")
+                for sc, c in _CRC_LOCAL_PAIRS],
     output:
-        cell_feature = op.join(
-            CRC_RUN, "features",
-            "{subcat}_{cat}_{patient}_{location}.cell_feature.tsv.gz"),
-        feature = op.join(
-            CRC_RUN, "features",
-            "{subcat}_{cat}_{patient}_{location}.feature.tsv.gz"),
+        cell_feature = [
+            op.join(CRC_RUN, "features",
+                    "{patient}_{location}." + f"{sc}.{c}.cell_feature.tsv.gz")
+            for sc, c in _CRC_LOCAL_PAIRS],
+        feature = [
+            op.join(CRC_RUN, "features",
+                    "{patient}_{location}." + f"{sc}.{c}.feature.tsv.gz")
+            for sc, c in _CRC_LOCAL_PAIRS],
     params:
-        prefix = op.join(
-            CRC_RUN, "features",
-            "{subcat}_{cat}_{patient}_{location}"),
+        prefix = op.join(CRC_RUN, "features", "{patient}_{location}"),
+        features_flags = lambda w, input: " ".join(
+            f"--features {b}" for b in input.beds),
         i_max_lag = config["amet"]["i_max_lag"],
         min_cpgs = config["amet"]["min_cpgs_per_feature"],
         min_cells = min_cells_per_group(),
@@ -359,14 +365,14 @@ rule run_amet_on_crc_features:
     threads: min(workflow.cores, 4)
     log:
         op.join(CRC_RUN, "logs",
-                "amet_{subcat}_{cat}_{patient}_{location}.log"),
+                "amet_features_{patient}_{location}.log"),
     shell:
         """
         mkdir -p $(dirname {params.prefix})
         {input.binary} \
             --genome {input.genome} \
             --cells {input.cells} \
-            --features {input.bed} \
+            {params.features_flags} \
             --output-prefix {params.prefix} \
             --i-max-lag {params.i_max_lag} \
             --min-cpgs-per-feature {params.min_cpgs} \
@@ -439,12 +445,12 @@ def _crc_combos():
 def list_crc_features_outputs(wildcards):
     combos = _crc_combos()
     out = []
-    for sc, c in _CRC_LOCAL_PAIRS:
-        for p, l in combos:
+    for p, l in combos:
+        for sc, c in _CRC_LOCAL_PAIRS:
             out.append(op.join(CRC_RUN, "features",
-                               f"{sc}_{c}_{p}_{l}.cell_feature.tsv.gz"))
+                               f"{p}_{l}.{sc}.{c}.cell_feature.tsv.gz"))
             out.append(op.join(CRC_RUN, "features",
-                               f"{sc}_{c}_{p}_{l}.feature.tsv.gz"))
+                               f"{p}_{l}.{sc}.{c}.feature.tsv.gz"))
     return out
 
 

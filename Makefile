@@ -2,8 +2,10 @@
 ## datasets (Argelaguet, CRC, Ecker) on a server with enough RAM.
 ##
 ## Not intended for laptops: the runs allocate hundreds of GB of virtual
-## memory across many parallel amet jobs. The recipes set ulimit -v
-## 200 GB as a soft safeguard and let snakemake fan out across CORES cores.
+## memory across many parallel amet jobs. The recipes set ulimit -v as a
+## soft safeguard (100 GB per process, see ULIMIT_KB) and let snakemake fan
+## out across CORES cores. The ulimit is per-process: every job shell
+## inherits the same cap, it is not a shared budget across rules.
 ##
 ## Usage:
 ##   make argelaguet                  # proto by default (results/argelaguet_proto/)
@@ -17,15 +19,16 @@
 ## Variables (override on the command line):
 ##   MODE         proto | full        which dataset config file to load
 ##                                    (default: proto)
-##   CORES        snakemake --cores value (default 16)
-##   ULIMIT_KB    virtual memory cap in KB (default 209715200, i.e. 200 GB)
+##   CORES        snakemake --cores value (default 40)
+##   ULIMIT_KB    per-process virtual memory cap in KB, inherited by every
+##                job shell (default 104857600, i.e. 100 GB)
 ##   CONDA_ENV    name of the conda env that holds snakemake (default snakemake)
 ##   CONDA_INIT   path to the conda activation script
 ##                (default ~/miniconda3/bin/activate)
 
 MODE        ?= proto
-CORES       ?= 16
-ULIMIT_KB   ?= 209715200
+CORES       ?= 40
+ULIMIT_KB   ?= 104857600
 CONDA_ENV   ?= snakemake
 CONDA_INIT  ?= $(HOME)/miniconda3/bin/activate
 

@@ -3,10 +3,10 @@ use amet::features::{Feature, read_features};
 use amet::genome::ensure_cpg_index;
 use amet::io::open_write;
 use amet::kmer::{PairCounts, build_window, marginal_counts, pair_counts_all_lags};
-use amet::manifest::read_manifest;
+use amet::manifest::{CellRow, read_manifest};
 use amet::parsers::{CellFormat, read_cell};
 use amet::reference::read_cpg_reference;
-use amet::scores::{i_total::i_total, jsd::multi_jsd};
+use amet::scores::{i_total::i_total, jsd::JsdAccumulator};
 use anyhow::{Context, Result, anyhow};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -99,6 +99,7 @@ fn main() -> Result<()> {
             cf_writer,
             feat_writer,
             pair_writer,
+            agg: HashMap::new(),
         });
     }
 
@@ -107,162 +108,106 @@ fn main() -> Result<()> {
     eprintln!("[amet] cells: {}", manifest.len());
 
     let i_max_lag = cli.i_max_lag as usize;
-
-    // Per-cell processing in parallel; outer Vec indexed by cell, inner by feature set.
-    let per_cell_results: Vec<Vec<Vec<CellFeatureRow>>> = manifest
-        .par_iter()
-        .map(|cell| {
-            let format = match cell.format.as_deref() {
-                Some(s) => {
-                    CellFormat::parse(s).unwrap_or_else(|| CellFormat::detect_from_path(&cell.path))
-                }
-                None => CellFormat::detect_from_path(&cell.path),
-            };
-            let calls = match read_cell(&cell.path, format, &reference) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("[amet] error reading {}: {}", cell.path.display(), e);
-                    return (0..sets.len()).map(|_| Vec::new()).collect();
-                }
-            };
-            sets.iter()
-                .map(|set| {
-                    let mut rows = Vec::with_capacity(set.features.len());
-                    for feature in &set.features {
-                        let window = build_window(
-                            feature,
-                            &reference,
-                            &calls,
-                            cli.meth_call_threshold,
-                            cli.min_reads_per_cpg,
-                        );
-                        let n_cov = window.n_observed() as u32;
-                        let mc = marginal_counts(&window);
-                        let pair_tables: Vec<PairCounts> =
-                            pair_counts_all_lags(&window, i_max_lag, cli.max_pair_distance);
-                        let mean = window.mean_meth();
-                        let i_per_lag: Vec<f64> =
-                            pair_tables.iter().map(amet::scores::i_total::i_k).collect();
-                        let total = i_total(&pair_tables);
-                        rows.push(CellFeatureRow {
-                            cell_id: cell.cell_id.clone(),
-                            group: cell.group.clone(),
-                            feature_id: feature.feature_id.clone(),
-                            n_covered: n_cov,
-                            n_zeros: mc.counts[0],
-                            n_ones: mc.counts[1],
-                            mean_meth: mean,
-                            i_total_value: total,
-                            i_per_lag,
-                            pair_tables,
-                        });
-                    }
-                    rows
-                })
-                .collect()
-        })
-        .collect();
-
-    // Write per-set outputs, computing feature-level aggregates as we go.
     let min_n = cli.min_cpgs_per_feature;
-    for (set_idx, (set, out)) in sets.iter().zip(outputs.iter_mut()).enumerate() {
-        let mut feat_to_group_cells: HashMap<(String, String), Vec<PairCounts>> = HashMap::new();
-        let mut feat_to_group_coverage: HashMap<(String, String), (u64, u64)> = HashMap::new();
-        let mut feat_to_group_meth: HashMap<(String, String), Vec<f64>> = HashMap::new();
-        let mut feat_to_group_itotal: HashMap<(String, String), Vec<f64>> = HashMap::new();
 
-        for cell_rows in &per_cell_results {
-            for row in &cell_rows[set_idx] {
-                write!(
-                    out.cf_writer,
-                    "{}\t{}\t{}\t{}\t",
-                    row.cell_id, row.group, row.feature_id, row.n_covered
-                )?;
-                match row.mean_meth {
-                    Some(m) => write!(out.cf_writer, "{:.6}", m)?,
-                    None => write!(out.cf_writer, "NA")?,
-                }
-                write!(out.cf_writer, "\t{}\t{}", row.n_zeros, row.n_ones)?;
-                if row.n_covered >= min_n {
-                    write!(out.cf_writer, "\t{:.6}", row.i_total_value)?;
-                    for v in &row.i_per_lag {
-                        write!(out.cf_writer, "\t{:.6}", v)?;
+    // Stream per cell: each cell file is read once and scored against every
+    // feature set. Its cell_feature and pair_counts rows are written out and
+    // dropped immediately, so peak memory stays near one (cell, set) batch
+    // rather than the full cells x sets x features matrix. Feature-level
+    // aggregates are folded incrementally (Welford for mean/variance,
+    // JsdAccumulator for jsd), so no per-cell values are retained.
+    for cell in &manifest {
+        let format = match cell.format.as_deref() {
+            Some(s) => {
+                CellFormat::parse(s).unwrap_or_else(|| CellFormat::detect_from_path(&cell.path))
+            }
+            None => CellFormat::detect_from_path(&cell.path),
+        };
+        let calls = match read_cell(&cell.path, format, &reference) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[amet] error reading {}: {}", cell.path.display(), e);
+                continue;
+            }
+        };
+
+        for (set, out) in sets.iter().zip(outputs.iter_mut()) {
+            // Score this cell's features in parallel; collect preserves feature order.
+            let rows: Vec<CellFeatureRow> = set
+                .features
+                .par_iter()
+                .map(|feature| {
+                    let window = build_window(
+                        feature,
+                        &reference,
+                        &calls,
+                        cli.meth_call_threshold,
+                        cli.min_reads_per_cpg,
+                    );
+                    let mc = marginal_counts(&window);
+                    let pair_tables =
+                        pair_counts_all_lags(&window, i_max_lag, cli.max_pair_distance);
+                    let i_per_lag: Vec<f64> =
+                        pair_tables.iter().map(amet::scores::i_total::i_k).collect();
+                    CellFeatureRow {
+                        feature_id: &feature.feature_id,
+                        n_covered: window.n_observed() as u32,
+                        n_zeros: mc.counts[0],
+                        n_ones: mc.counts[1],
+                        mean_meth: window.mean_meth(),
+                        i_total_value: i_total(&pair_tables),
+                        i_per_lag,
+                        pair_tables,
                     }
-                } else {
-                    write!(out.cf_writer, "\tNA")?;
-                    for _ in 0..i_max_lag {
-                        write!(out.cf_writer, "\tNA")?;
-                    }
-                }
-                writeln!(out.cf_writer)?;
+                })
+                .collect();
 
-                for (idx, pt) in row.pair_tables.iter().enumerate() {
-                    let lag = idx + 1;
-                    writeln!(
-                        out.pair_writer,
-                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                        row.cell_id,
-                        row.group,
-                        row.feature_id,
-                        lag,
-                        pt.counts[0],
-                        pt.counts[1],
-                        pt.counts[2],
-                        pt.counts[3]
-                    )?;
-                }
-
+            for row in &rows {
+                write_cell_feature_row(&mut out.cf_writer, cell, row, min_n, i_max_lag)?;
+                write_pair_count_rows(&mut out.pair_writer, cell, row)?;
                 if row.n_covered >= min_n {
-                    let key = (row.feature_id.clone(), row.group.clone());
-                    feat_to_group_cells
-                        .entry(key.clone())
-                        .or_default()
-                        .push(row.pair_tables[0]);
-                    let acc = feat_to_group_coverage.entry(key.clone()).or_insert((0, 0));
-                    acc.0 += row.n_covered as u64;
-                    acc.1 += 1;
+                    let key = (row.feature_id.to_string(), cell.group.clone());
+                    let e = out.agg.entry(key).or_default();
+                    e.cov_sum += row.n_covered as u64;
+                    e.n_cells += 1;
                     if let Some(m) = row.mean_meth {
-                        feat_to_group_meth.entry(key.clone()).or_default().push(m);
+                        e.meth.add(m);
                     }
-                    feat_to_group_itotal
-                        .entry(key)
-                        .or_default()
-                        .push(row.i_total_value);
+                    e.itotal.add(row.i_total_value);
+                    e.jsd.add(&row.pair_tables[0]);
                 }
             }
         }
+    }
 
-        let mut keys: Vec<_> = feat_to_group_cells.keys().cloned().collect();
+    // Feature-level aggregates per set, written sorted by (feature_id, group).
+    for (set, out) in sets.iter().zip(outputs.iter_mut()) {
+        let mut keys: Vec<_> = out.agg.keys().cloned().collect();
         keys.sort();
         for key in keys {
-            let cells = &feat_to_group_cells[&key];
-            let (cov_sum, n_cells) = feat_to_group_coverage[&key];
-            let mean_cov = if n_cells > 0 {
-                cov_sum as f64 / n_cells as f64
+            let e = &out.agg[&key];
+            let mean_cov = if e.n_cells > 0 {
+                e.cov_sum as f64 / e.n_cells as f64
             } else {
                 0.0
             };
-            let meth_vals = feat_to_group_meth.get(&key);
-            let i_vals = feat_to_group_itotal.get(&key);
-            let (meth_mean, meth_var) = mean_var(meth_vals);
-            let (i_mean, i_var) = mean_var(i_vals);
-            let jsd = if n_cells >= cli.min_cells_per_group as u64 {
-                Some(multi_jsd(cells))
+            let jsd = if e.n_cells >= cli.min_cells_per_group as u64 {
+                Some(e.jsd.finish())
             } else {
                 None
             };
             write!(
                 out.feat_writer,
                 "{}\t{}\t{}\t{:.6}\t",
-                key.0, key.1, n_cells, mean_cov
+                key.0, key.1, e.n_cells, mean_cov
             )?;
-            write_opt(&mut out.feat_writer, meth_mean)?;
+            write_opt(&mut out.feat_writer, e.meth.mean())?;
             write!(out.feat_writer, "\t")?;
-            write_opt(&mut out.feat_writer, meth_var)?;
+            write_opt(&mut out.feat_writer, e.meth.var())?;
             write!(out.feat_writer, "\t")?;
-            write_opt(&mut out.feat_writer, i_mean)?;
+            write_opt(&mut out.feat_writer, e.itotal.mean())?;
             write!(out.feat_writer, "\t")?;
-            write_opt(&mut out.feat_writer, i_var)?;
+            write_opt(&mut out.feat_writer, e.itotal.var())?;
             write!(out.feat_writer, "\t")?;
             write_opt(&mut out.feat_writer, jsd)?;
             writeln!(out.feat_writer)?;
@@ -279,6 +224,100 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Welford online accumulator for mean and sample variance. Used so the
+/// feature-level aggregates need not retain every per-cell value.
+#[derive(Default)]
+struct Welford {
+    n: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Welford {
+    fn add(&mut self, x: f64) {
+        self.n += 1;
+        let delta = x - self.mean;
+        self.mean += delta / self.n as f64;
+        let delta2 = x - self.mean;
+        self.m2 += delta * delta2;
+    }
+
+    fn mean(&self) -> Option<f64> {
+        if self.n == 0 { None } else { Some(self.mean) }
+    }
+
+    fn var(&self) -> Option<f64> {
+        if self.n < 2 {
+            None
+        } else {
+            Some(self.m2 / (self.n - 1) as f64)
+        }
+    }
+}
+
+/// Streaming feature-level aggregate for one (feature_id, group).
+#[derive(Default)]
+struct AggEntry {
+    cov_sum: u64,
+    n_cells: u64,
+    meth: Welford,
+    itotal: Welford,
+    jsd: JsdAccumulator,
+}
+
+fn write_cell_feature_row(
+    w: &mut dyn Write,
+    cell: &CellRow,
+    row: &CellFeatureRow<'_>,
+    min_n: u32,
+    i_max_lag: usize,
+) -> std::io::Result<()> {
+    write!(
+        w,
+        "{}\t{}\t{}\t{}\t",
+        cell.cell_id, cell.group, row.feature_id, row.n_covered
+    )?;
+    match row.mean_meth {
+        Some(m) => write!(w, "{:.6}", m)?,
+        None => write!(w, "NA")?,
+    }
+    write!(w, "\t{}\t{}", row.n_zeros, row.n_ones)?;
+    if row.n_covered >= min_n {
+        write!(w, "\t{:.6}", row.i_total_value)?;
+        for v in &row.i_per_lag {
+            write!(w, "\t{:.6}", v)?;
+        }
+    } else {
+        write!(w, "\tNA")?;
+        for _ in 0..i_max_lag {
+            write!(w, "\tNA")?;
+        }
+    }
+    writeln!(w)
+}
+
+fn write_pair_count_rows(
+    w: &mut dyn Write,
+    cell: &CellRow,
+    row: &CellFeatureRow<'_>,
+) -> std::io::Result<()> {
+    for (idx, pt) in row.pair_tables.iter().enumerate() {
+        writeln!(
+            w,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            cell.cell_id,
+            cell.group,
+            row.feature_id,
+            idx + 1,
+            pt.counts[0],
+            pt.counts[1],
+            pt.counts[2],
+            pt.counts[3]
+        )?;
+    }
+    Ok(())
+}
+
 struct FeatureSet {
     label: String,
     features: Vec<Feature>,
@@ -291,12 +330,13 @@ struct SetOutputs {
     cf_writer: Box<dyn Write>,
     feat_writer: Box<dyn Write>,
     pair_writer: Box<dyn Write>,
+    agg: HashMap<(String, String), AggEntry>,
 }
 
-struct CellFeatureRow {
-    cell_id: String,
-    group: String,
-    feature_id: String,
+/// One scored (cell, feature). `feature_id` borrows from the feature set, which
+/// outlives the short-lived per-(cell, set) batch this row belongs to.
+struct CellFeatureRow<'a> {
+    feature_id: &'a str,
     n_covered: u32,
     n_zeros: u32,
     n_ones: u32,
@@ -354,21 +394,7 @@ fn with_suffix(prefix: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn mean_var(values: Option<&Vec<f64>>) -> (Option<f64>, Option<f64>) {
-    let v = match values {
-        Some(v) if !v.is_empty() => v,
-        _ => return (None, None),
-    };
-    let n = v.len() as f64;
-    let mean = v.iter().sum::<f64>() / n;
-    if v.len() < 2 {
-        return (Some(mean), None);
-    }
-    let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
-    (Some(mean), Some(var))
-}
-
-fn write_opt<W: Write>(w: &mut W, x: Option<f64>) -> std::io::Result<()> {
+fn write_opt<W: Write + ?Sized>(w: &mut W, x: Option<f64>) -> std::io::Result<()> {
     match x {
         Some(v) => write!(w, "{:.6}", v),
         None => write!(w, "NA"),

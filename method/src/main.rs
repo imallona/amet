@@ -50,7 +50,8 @@ fn main() -> Result<()> {
         return Err(anyhow!("--features is required"));
     }
 
-    // Resolve per-set labels and check uniqueness up front so we fail before any I/O.
+    // Resolve per-set labels and check uniqueness up front so we fail before
+    // reading feature BEDs and creating per-set outputs.
     let labels: Vec<String> = cli.features.iter().map(|p| features_label(p)).collect();
     {
         let mut seen: HashSet<&str> = HashSet::new();
@@ -107,6 +108,16 @@ fn main() -> Result<()> {
     let manifest = read_manifest(cells_path, &cli.group_column).context("reading manifest")?;
     eprintln!("[amet] cells: {}", manifest.len());
 
+    // Intern group labels: the per-row aggregate key becomes two integers
+    // (feature index, group id) instead of two freshly allocated strings.
+    // A run has only a handful of distinct groups, so a linear scan is fine.
+    let mut group_names: Vec<String> = Vec::new();
+    for cell in &manifest {
+        if !group_names.iter().any(|g| g == &cell.group) {
+            group_names.push(cell.group.clone());
+        }
+    }
+
     let i_max_lag = cli.i_max_lag as usize;
     let min_n = cli.min_cpgs_per_feature;
 
@@ -130,6 +141,11 @@ fn main() -> Result<()> {
                 continue;
             }
         };
+        // Every cell's group was interned from this same manifest above.
+        let group_id = group_names
+            .iter()
+            .position(|g| g == &cell.group)
+            .expect("cell group interned from manifest") as u32;
 
         for (set, out) in sets.iter().zip(outputs.iter_mut()) {
             // Score this cell's features in parallel; collect preserves feature order.
@@ -162,12 +178,11 @@ fn main() -> Result<()> {
                 })
                 .collect();
 
-            for row in &rows {
+            for (feat_idx, row) in rows.iter().enumerate() {
                 write_cell_feature_row(&mut out.cf_writer, cell, row, min_n, i_max_lag)?;
                 write_pair_count_rows(&mut out.pair_writer, cell, row)?;
                 if row.n_covered >= min_n {
-                    let key = (row.feature_id.to_string(), cell.group.clone());
-                    let e = out.agg.entry(key).or_default();
+                    let e = out.agg.entry((feat_idx as u32, group_id)).or_default();
                     e.cov_sum += row.n_covered as u64;
                     e.n_cells += 1;
                     if let Some(m) = row.mean_meth {
@@ -181,11 +196,29 @@ fn main() -> Result<()> {
     }
 
     // Feature-level aggregates per set, written sorted by (feature_id, group).
+    // Aggregates are keyed by integer indices; reconstruct the names here and
+    // sort lexically so the output order is stable and independent of the
+    // HashMap iteration order. The feature index breaks ties so the order is
+    // fully determined even if two features share a feature_id.
     for (set, out) in sets.iter().zip(outputs.iter_mut()) {
-        let mut keys: Vec<_> = out.agg.keys().cloned().collect();
-        keys.sort();
+        let mut keys: Vec<(u32, u32)> = out.agg.keys().copied().collect();
+        keys.sort_by(|a, b| {
+            let ka = (
+                set.features[a.0 as usize].feature_id.as_str(),
+                group_names[a.1 as usize].as_str(),
+                a.0,
+            );
+            let kb = (
+                set.features[b.0 as usize].feature_id.as_str(),
+                group_names[b.1 as usize].as_str(),
+                b.0,
+            );
+            ka.cmp(&kb)
+        });
         for key in keys {
             let e = &out.agg[&key];
+            let feature_id = set.features[key.0 as usize].feature_id.as_str();
+            let group = group_names[key.1 as usize].as_str();
             let mean_cov = if e.n_cells > 0 {
                 e.cov_sum as f64 / e.n_cells as f64
             } else {
@@ -199,7 +232,7 @@ fn main() -> Result<()> {
             write!(
                 out.feat_writer,
                 "{}\t{}\t{}\t{:.6}\t",
-                key.0, key.1, e.n_cells, mean_cov
+                feature_id, group, e.n_cells, mean_cov
             )?;
             write_opt(&mut out.feat_writer, e.meth.mean())?;
             write!(out.feat_writer, "\t")?;
@@ -255,7 +288,7 @@ impl Welford {
     }
 }
 
-/// Streaming feature-level aggregate for one (feature_id, group).
+/// Streaming feature-level aggregate for one (feature, group).
 #[derive(Default)]
 struct AggEntry {
     cov_sum: u64,
@@ -330,7 +363,9 @@ struct SetOutputs {
     cf_writer: Box<dyn Write>,
     feat_writer: Box<dyn Write>,
     pair_writer: Box<dyn Write>,
-    agg: HashMap<(String, String), AggEntry>,
+    /// Keyed by (feature index within the set, interned group id) so the hot
+    /// per-row fold does not allocate a fresh key string each time.
+    agg: HashMap<(u32, u32), AggEntry>,
 }
 
 /// One scored (cell, feature). `feature_id` borrows from the feature set, which
@@ -371,10 +406,9 @@ fn write_headers(
     Ok(())
 }
 
-/// Derive a stable label for a BED path: strip a compressed-BED extension if any,
-/// otherwise use the file name as-is. Used to disambiguate output paths when
-/// multiple --features are supplied. The list of suffixes mirrors what
-/// `crate::io::open_read` accepts as compressed input.
+/// Derive a stable label for a BED path by stripping known BED and compression
+/// suffixes if present; otherwise use the file name as-is. Used to disambiguate
+/// output paths when multiple --features are supplied.
 fn features_label(path: &Path) -> String {
     let raw = path
         .file_name()

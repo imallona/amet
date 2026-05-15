@@ -493,6 +493,123 @@ fn multi_features_rejects_duplicate_basenames() {
 }
 
 #[test]
+fn feature_tsv_multi_feature_multi_group() {
+    // Two features in one BED, four cells across two groups. Exercises the
+    // per-(feature index, group id) aggregate keying: each feature must get
+    // its own feature.tsv row per group, correctly labelled, with no
+    // cross-contamination between features.
+    let dir = tempdir().unwrap();
+
+    // 12 CpGs at 0-based positions 9, 19, ..., 119 on chr1.
+    let cpgs: String = (0..12).map(|i| format!("chr1\t{}\n", i * 10 + 9)).collect();
+    let cpg_path = write_file(dir.path(), "cpgs.tsv", &cpgs);
+
+    // featA covers the first 6 CpGs (0-based start < 60), featB the last 6.
+    let bed = write_file(
+        dir.path(),
+        "feat.bed",
+        "chr1\t0\t60\tfeatA\nchr1\t60\t130\tfeatB\n",
+    );
+
+    // Every cell: featA CpGs unmethylated (m=0), featB CpGs methylated (m=1).
+    // The allc + strand C position is the 0-based CpG start + 1, so 10..=120.
+    let mut cell_body = String::new();
+    for pos in (10..=60).step_by(10) {
+        cell_body.push_str(&format!("chr1\t{}\t+\tCGN\t0\t1\t0\n", pos));
+    }
+    for pos in (70..=120).step_by(10) {
+        cell_body.push_str(&format!("chr1\t{}\t+\tCGN\t1\t1\t1\n", pos));
+    }
+    let cell_paths: Vec<_> = ["A", "B", "C", "D"]
+        .iter()
+        .map(|id| write_file(dir.path(), &format!("cell{}.allc.tsv", id), &cell_body))
+        .collect();
+
+    let manifest = write_file(
+        dir.path(),
+        "cells.tsv",
+        &format!(
+            "cell_id\tgroup\tpath\nA\tg1\t{}\nB\tg1\t{}\nC\tg2\t{}\nD\tg2\t{}\n",
+            cell_paths[0].display(),
+            cell_paths[1].display(),
+            cell_paths[2].display(),
+            cell_paths[3].display(),
+        ),
+    );
+
+    let prefix = dir.path().join("run");
+    let status = Command::new(binary_path())
+        .args([
+            "--cpg-reference",
+            cpg_path.to_str().unwrap(),
+            "--features",
+            bed.to_str().unwrap(),
+            "--cells",
+            manifest.to_str().unwrap(),
+            "--output-prefix",
+            prefix.to_str().unwrap(),
+            "--min-cpgs-per-feature",
+            "3",
+            "--min-cells-per-group",
+            "2",
+        ])
+        .status()
+        .expect("running amet binary");
+    assert!(status.success(), "amet exited with non-zero status");
+
+    // cell_feature: header + 4 cells x 2 features = 8 data rows.
+    let cf = read_gz(&dir.path().join("run.cell_feature.tsv.gz"));
+    assert_eq!(
+        cf.lines().count(),
+        9,
+        "expected header + 8 cell_feature rows"
+    );
+
+    // feature.tsv: header + (2 features x 2 groups) = 4 data rows, sorted.
+    let feat = read_gz(&dir.path().join("run.feature.tsv.gz"));
+    let lines: Vec<&str> = feat.lines().collect();
+    assert_eq!(
+        lines.len(),
+        5,
+        "expected header + 4 feature rows, got {}",
+        lines.len()
+    );
+    let header: Vec<&str> = lines[0].split('\t').collect();
+    let col = |name: &str| header.iter().position(|h| *h == name).unwrap();
+    let (fid, grp, ncells, meth) = (
+        col("feature_id"),
+        col("group"),
+        col("n_cells"),
+        col("mean_meth_mean"),
+    );
+    let rows: Vec<Vec<&str>> = lines[1..].iter().map(|l| l.split('\t').collect()).collect();
+
+    // Sorted by (feature_id, group): featA/g1, featA/g2, featB/g1, featB/g2.
+    let expect = [
+        ("featA", "g1"),
+        ("featA", "g2"),
+        ("featB", "g1"),
+        ("featB", "g2"),
+    ];
+    for (i, (efid, egrp)) in expect.iter().enumerate() {
+        assert_eq!(rows[i][fid], *efid, "row {} feature_id", i);
+        assert_eq!(rows[i][grp], *egrp, "row {} group", i);
+        assert_eq!(rows[i][ncells], "2", "row {} n_cells", i);
+    }
+
+    // featA is all-unmethylated, featB all-methylated. If the feature-index
+    // keying were wrong, these per-feature means would be swapped or merged.
+    for row in &rows[0..2] {
+        let m: f64 = row[meth].parse().unwrap();
+        assert!(m < 0.5, "featA mean_meth_mean should be ~0, got {}", m);
+    }
+    for row in &rows[2..4] {
+        let m: f64 = row[meth].parse().unwrap();
+        assert!(m > 0.5, "featB mean_meth_mean should be ~1, got {}", m);
+    }
+}
+
+#[test]
 fn cli_rejects_neither_genome_nor_cpg_reference() {
     let dir = tempdir().unwrap();
     let bed = write_file(dir.path(), "f.bed", "chr1\t0\t10\tx\n");

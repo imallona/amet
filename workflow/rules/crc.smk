@@ -330,8 +330,10 @@ rule crc_combine_window_annotations:
 rule run_amet_on_crc_features:
     """Run amet once per (patient, location) combo across every annotation BED.
     Each BED is passed as a separate --features, so the cell files are parsed
-    only once for the whole annotation panel. amet writes one output triplet
-    per BED, keyed by the staged BED basename <subcat>.<cat>."""
+    only once for the whole annotation panel. amet writes a cell_feature,
+    feature, and pair_counts file per BED, keyed by the staged BED basename
+    <subcat>.<cat>; this rule declares the cell_feature and feature files as
+    tracked outputs."""
     wildcard_constraints:
         patient = r"[^_.]+",
         location = r"[^_.]+",

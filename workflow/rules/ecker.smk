@@ -387,8 +387,10 @@ def _ecker_combo_cell_tsvs(wildcards):
 rule run_amet_on_ecker_features:
     """Run amet once per (region, sub_type) combo across every annotation BED.
     Each BED is passed as a separate --features so the cell files are parsed
-    only once for the whole annotation panel. amet writes one output triplet
-    per BED, keyed by the BED basename (the annotation name)."""
+    only once for the whole annotation panel. amet writes a cell_feature,
+    feature, and pair_counts file per BED, keyed by the BED basename (the
+    annotation name); this rule declares the cell_feature and feature files
+    as tracked outputs."""
     wildcard_constraints:
         region = r"[^_.]+",
         sub_type = r"[^_.]+",

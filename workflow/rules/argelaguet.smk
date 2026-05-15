@@ -233,9 +233,11 @@ rule chr19_sizes:
 rule run_amet_on_argelaguet_features:
     """Run amet once per (stage, lineage) combo across every annotation BED.
     Each BED is passed as a separate --features so the cell files are parsed
-    only once for the whole annotation panel. amet writes one output triplet
-    per BED, keyed by the BED basename (the annotation name). stage and
-    lineage are sanitized strings (gsub '[ ._]' '-')."""
+    only once for the whole annotation panel. amet writes a cell_feature,
+    feature, and pair_counts file per BED, keyed by the BED basename (the
+    annotation name); this rule declares the cell_feature and feature files
+    as tracked outputs. stage and lineage are sanitized strings
+    (gsub '[ ._]' '-')."""
     wildcard_constraints:
         stage = r"[^_.]+",
         lineage = r"[^_.]+",

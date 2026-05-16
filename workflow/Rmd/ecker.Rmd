@@ -429,6 +429,18 @@ plot_driver_scatter(driver_df,
 Rows = sub-type (clustered). Columns = annotation. Row annotation bars show cell class and major type.
 
 ```{r heatmap_helpers}
+## ComplexHeatmap clusters rows within each row_split slice with hclust, which
+## errors on NA/NaN/Inf distances. jsd matrices have sub-types with no value
+## for some annotations. Impute non-finite cells to the slice mean (0 if the
+## slice has no finite value) for clustering only; the displayed matrix keeps
+## its NAs.
+cluster_rows_na_safe <- function(m) {
+  finite_vals <- m[is.finite(m)]
+  fill <- if (length(finite_vals) > 0) mean(finite_vals) else 0
+  m[!is.finite(m)] <- fill
+  hclust(dist(m))
+}
+
 make_heatmap <- function(df, value_col, title,
                           palette = c("navy", "white", "firebrick")) {
   ## wide matrix: rows = sub_type, cols = annotation
@@ -467,7 +479,7 @@ make_heatmap <- function(df, value_col, title,
           name = title,
           col = col_fun,
           row_split = wide$cell_class,
-          cluster_rows = TRUE,
+          cluster_rows = cluster_rows_na_safe,
           cluster_columns = FALSE,
           show_row_names = TRUE,
           show_column_names = TRUE,

@@ -233,3 +233,28 @@ show_plot("feature_variability")
 ```
 
 CPU and peak memory bars in the consensus-perturbation and feature-variability panels come from snakemake's `benchmark:` directive on each tool's run rule.
+
+# Emanuel coverage simulation
+
+Emanuel Sonder's coverage simulation is a separate generator from the amet sweeps above. A 2-state Markov chain lays down the within-cell methylation pattern under one of four transition matrices (`lmr` low-methylation, `hmr` high-methylation, `imrCons` correlated intermediate, `imrRand` independent intermediate), and a coverage model then drops CpGs to a target density: `nb` samples covered and missing stretch lengths from a negative binomial, `rand` draws each CpG independently. The grid spans CpG counts {50, 100, 1000, 10000} and coverage regimes {low, lowReal, medium, high, complete}; the `lowReal` regime draws its missingness from real gastrulation cpg_level cells. The scheme below sketches the negative-binomial coverage model.
+
+```{r emanuel_scheme, results = "asis"}
+scheme <- normalizePath(file.path(dirname(knitr::current_input()), "..", "resources", "simulations_nb_overview.svg"), mustWork = FALSE)
+if (file.exists(scheme)) cat(sprintf("![Coverage simulation scheme, by Emanuel Sonder](%s)\n\n", scheme))
+```
+
+amet scores each cell over a single feature spanning the whole CpG axis. The within-cell score `i_total` and its analytical normalisation `i_norm = i_total / (k_max * H(p_hat))` are plotted against mean methylation, faceted by CpG count (rows) and coverage regime (columns), coloured by transition matrix and shaped by coverage model.
+
+```{r emanuel_i_total, results = "asis"}
+show_plot("emanuel_coverage_i_total")
+```
+
+```{r emanuel_i_norm, results = "asis"}
+show_plot("emanuel_coverage_i_norm")
+```
+
+`i_total` against `i_norm` directly, same faceting:
+
+```{r emanuel_pairwise, results = "asis"}
+show_plot("emanuel_coverage_pairwise")
+```

@@ -28,6 +28,9 @@ include: op.join("rules", "ecker.smk")
 
 SIM = op.join(RESULTS, "simulations")
 
+## Included after SIM is defined; emanuel_sim.smk references it.
+include: op.join("rules", "emanuel_sim.smk")
+
 EVAL_OUTPUTS = [
     op.join(SIM, "eval", "p_decoupling.pdf"),
     op.join(SIM, "eval", "simulator_diagnostics.pdf"),
@@ -44,6 +47,9 @@ EVAL_OUTPUTS = [
     op.join(SIM, "eval", "tool_comparison.pdf"),
     op.join(SIM, "eval", "consensus_perturbation.pdf"),
     op.join(SIM, "eval", "feature_variability.pdf"),
+    op.join(SIM, "eval", "emanuel_coverage_i_total.pdf"),
+    op.join(SIM, "eval", "emanuel_coverage_i_norm.pdf"),
+    op.join(SIM, "eval", "emanuel_coverage_pairwise.pdf"),
 ]
 
 SIM_REPORT_HTML = op.join(SIM, "simulations_report.html")

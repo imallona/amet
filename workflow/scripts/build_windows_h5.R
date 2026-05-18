@@ -60,9 +60,6 @@ pos <- match(need, cols)
 if (anyNA(pos))
   stop("cell_feature missing required columns: ",
        paste(need[is.na(pos)], collapse = ", "))
-## Named select: fread names the output columns by these names, so the rest
-## of the script can address them by name regardless of file column order.
-sel <- setNames(pos, need)
 
 n_windows <- NA_integer_
 feature_ids <- NULL
@@ -101,7 +98,9 @@ pending <- NULL
 repeat {
   lines <- readLines(con, n = opt$batch_lines)
   if (length(lines) == 0L) break
-  dt <- fread(text = lines, header = FALSE, sep = "\t", select = sel)
+  dt <- fread(text = lines, header = FALSE, sep = "\t")
+  dt <- dt[, ..pos]
+  setnames(dt, need)
   pending <- if (is.null(pending)) dt else rbindlist(list(pending, dt))
   ## The last cell in pending may continue into the next batch; everything
   ## before it is complete because amet writes each cell as one block.

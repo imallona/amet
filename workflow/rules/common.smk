@@ -67,6 +67,7 @@ RMD_SHARED_SCRIPTS = [
 DRIVER_UTILS_R = op.join(SCRIPTS_DIR, "driver_utils.R")
 EMBEDDING_UTILS_R = op.join(SCRIPTS_DIR, "embedding_utils.R")
 DIFF_TESTING_R = op.join(SCRIPTS_DIR, "diff_testing.R")
+WINDOWS_H5_R = op.join(SCRIPTS_DIR, "windows_h5.R")
 
 METHOD = op.join(REPO_ROOT, "method")
 ## Cargo.lock is gitignored (binary build artifact), so it's not listed as

@@ -36,6 +36,8 @@ dependencies:
   - r-igraph
   - r-ggraph
   - bioconductor-biocparallel
+  - bioconductor-rhdf5
+  - bioconductor-hdf5array
   - bioconductor-complexheatmap
   - bioconductor-pcamethods
   - bioconductor-singlecellexperiment

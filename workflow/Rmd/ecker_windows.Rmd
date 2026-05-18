@@ -13,6 +13,7 @@ output:
 params:
   features_dir: ""
   win_cell_feature: ""
+  win_h5: ""
   win_feature: ""
   win_bed: ""
   windows_annotation: ""
@@ -74,11 +75,13 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(ggplot2)
   library(BiocParallel)
+  library(HDF5Array)
 })
 
 repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."))
 source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
+source(file.path(repo_root, "workflow", "scripts", "windows_h5.R"))
 
 
 knitr::opts_chunk$set(
@@ -91,11 +94,10 @@ knitr::opts_chunk$set(
 ```
 
 ## Cell selection upstream of this Rmd:
-##   Per (region, sub_type) stratum, cells are picked by source-TAR size
-##   (proxy for observed-CpG coverage; tar contains one allc tsv.gz per cell)
-##   with plate-stratified round-robin so a single sequencing plate cannot
-##   dominate the pick. Cap = max_cells_per_combo (config/datasets.yaml:
-##   prototype.cells_per_group in proto, full.max_cells_per_combo otherwise).
+##   The windows run scores every cell in the dataset manifest (cells.tsv),
+##   with no per-stratum cap. This differs from the per-feature runs, which
+##   cap each (region, sub_type) stratum at max_cells_per_combo. In a full
+##   run that means all region-filtered cells are embedded here.
 
 ```{r load_meta}
 man <- fread(params$manifest)
@@ -105,32 +107,38 @@ cat("Major types:", length(unique(man$major_type)), "\n")
 ```
 
 ```{r load_amet_windows}
-## amet's window-scope output: two long tables. per-cell-per-window i_total
-## + mean_meth, and per-window-per-group jsd (loaded but not used in this
-## Rmd, kept for symmetry with the per-feature reports).
-win_cf <- fread(params$win_cell_feature)
+## amet's window-scope per-(cell, window) i_total and mean_meth, read from
+## the HDF5 store built upstream (the raw cell_feature table is too large to
+## read whole). Per-window-per-group jsd is read later from win_feature,
+## where the per-annotation aggregation needs it.
+wd <- load_windows_h5(params$win_h5)
+i_total_mat <- wd$i_total
+meth_mat <- wd$meth
+
 keep_cols <- intersect(c("cell_id", "cell_class", "major_type", "region", "sub_type"),
                        colnames(man))
-win_cf <- merge(win_cf, man[, ..keep_cols],
-                by = "cell_id", all.x = TRUE)
+cell_meta <- man[match(wd$cell_id, man$cell_id), ..keep_cols]
 
-cat("Cell-window rows:", nrow(win_cf), "\n")
-cat("Unique windows:", uniqueN(win_cf$feature_id), "\n")
-cat("Unique cells:", uniqueN(win_cf$cell_id), "\n")
+cat("Cell-window pairs:",
+    format(as.double(nrow(i_total_mat)) * ncol(i_total_mat),
+           big.mark = ",", scientific = FALSE), "\n")
+cat("Unique windows:", nrow(i_total_mat), "\n")
+cat("Unique cells:", ncol(i_total_mat), "\n")
 cat("Cell classes in data:\n")
-print(table(win_cf$cell_class, useNA = "ifany"))
+print(table(cell_meta$cell_class, useNA = "ifany"))
 cat("Major types in data:\n")
-print(table(win_cf$major_type, useNA = "ifany"))
+print(table(cell_meta$major_type, useNA = "ifany"))
 ```
 
 ```{r filter_na}
-## NA filter: drop windows missing in > 30% of cells. Applied here on the
-## long table.
-n_cells <- uniqueN(win_cf$cell_id)
-win_cov <- win_cf[, .(cov_frac = .N / n_cells), by = feature_id]
-keep_win <- win_cov[cov_frac >= 0.7, feature_id]
-win_cf <- win_cf[feature_id %in% keep_win]
-cat("Windows after NA filter (>= 70% cells covered):", uniqueN(win_cf$feature_id), "\n")
+## NA filter: drop windows covered in fewer than 70% of cells. A (cell, window)
+## is covered when mean_meth is non-NA (amet emits NA methylation only when the
+## window has no observed CpGs in that cell).
+cov_frac <- rowMeans(!is.na(meth_mat))
+keep_win <- cov_frac >= 0.7
+i_total_mat <- i_total_mat[keep_win, , drop = FALSE]
+meth_mat <- meth_mat[keep_win, , drop = FALSE]
+cat("Windows after NA filter (>= 70% cells covered):", nrow(i_total_mat), "\n")
 ```
 
 <!-- amet i_total is per cell, from cell_feature.tsv.gz. No meth correction here. -->
@@ -138,10 +146,13 @@ cat("Windows after NA filter (>= 70% cells covered):", uniqueN(win_cf$feature_id
 # QC
 
 ```{r cell_qc_df}
-cell_df <- win_cf[, .(
-  mean_i_total = mean(i_total,  na.rm = TRUE),
-  mean_meth = mean(mean_meth, na.rm = TRUE)
-), by = .(cell_id, cell_class, major_type)]
+cell_df <- data.table(
+  cell_id = cell_meta$cell_id,
+  cell_class = cell_meta$cell_class,
+  major_type = cell_meta$major_type,
+  mean_i_total = colMeans(i_total_mat, na.rm = TRUE),
+  mean_meth = colMeans(meth_mat, na.rm = TRUE)
+)
 
 write.csv(cell_df, "ecker_windows_per_cell_summary.csv", row.names = FALSE)
 ```
@@ -179,27 +190,27 @@ H3K9me3, H3K27me3, gene bodies, etc.).
 if (is.null(ann_bin) || ncol(ann_bin) == 0L) {
   cat("Annotation matrix empty; skipping per-annotation breakdowns.\n")
 } else {
-  common_wins <- intersect(unique(win_cf$feature_id), rownames(ann_bin))
+  common_wins <- intersect(rownames(i_total_mat), rownames(ann_bin))
   if (length(common_wins) == 0L) {
-    cat("No window overlap between i_total table and annotation matrix; skipping.\n")
+    cat("No window overlap between i_total matrix and annotation matrix; skipping.\n")
   } else {
-    win_sub <- win_cf[feature_id %in% common_wins]
     ann_bin_sub <- ann_bin[common_wins, , drop = FALSE]
 
+    ## Per cell, average i_total and methylation over the windows that do (1)
+    ## or do not (0) overlap each annotation.
     df_list <- lapply(colnames(ann_bin_sub), function(bf) {
       bin <- ann_bin_sub[[bf]]
-      names(bin) <- rownames(ann_bin_sub)
-      tmp <- win_sub[, .(
-        mean_i_total = mean(i_total, na.rm = TRUE),
-        mean_meth = mean(mean_meth, na.rm = TRUE)
-      ), by = .(cell_id, feature_id)]
-      tmp[, bin := bin[feature_id]]
-      out <- tmp[!is.na(bin), .(
-        mean_i_total = mean(mean_i_total, na.rm = TRUE),
-        mean_meth = mean(mean_meth, na.rm = TRUE)
-      ), by = .(cell_id, bin)]
-      out[, annotation := sub("_bin$", "", bf)]
-      out
+      rbindlist(lapply(c(0L, 1L), function(b) {
+        rows <- common_wins[which(bin == b)]
+        if (length(rows) == 0L) return(NULL)
+        data.table(
+          cell_id = colnames(i_total_mat),
+          bin = b,
+          mean_i_total = colMeans(i_total_mat[rows, , drop = FALSE], na.rm = TRUE),
+          mean_meth = colMeans(meth_mat[rows, , drop = FALSE], na.rm = TRUE),
+          annotation = sub("_bin$", "", bf)
+        )
+      }))
     })
 
     df_ann <- rbindlist(df_list)

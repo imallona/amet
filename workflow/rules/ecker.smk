@@ -483,6 +483,31 @@ rule run_amet_on_ecker_windows:
         """
 
 
+rule build_ecker_windows_h5:
+    """Pivot amet's long windows cell_feature into an HDF5 store of
+    windows x cells i_total and meth matrices. Streams the input cell block
+    by cell block so peak memory stays near one cell."""
+    conda:
+        op.join("..", "envs", "r-tools.yml")
+    input:
+        script = op.join(REPO_ROOT, "workflow", "scripts", "build_windows_h5.R"),
+        cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        manifest = op.join(ECKER_DATA, "cells.tsv"),
+    output:
+        h5 = op.join(ECKER_RUN, "windows", "all.windows.h5"),
+    threads: 4
+    log:
+        op.join(ECKER_RUN, "logs", "build_windows_h5.log"),
+    shell:
+        """
+        Rscript {input.script} \
+            --cell-feature {input.cell_feature} \
+            --manifest {input.manifest} \
+            --output {output.h5} \
+            --threads {threads} &> {log}
+        """
+
+
 def _ecker_combos():
     """(region, sub_type) pairs from cells.tsv after the manifest checkpoint.
     Sanitizes both fields by replacing space with '-'."""
@@ -511,12 +536,16 @@ def list_ecker_features_outputs(wildcards):
     return out
 
 
-def _ecker_render_shell(with_windows_annotation = False):
+def _ecker_render_shell(with_windows_annotation = False, with_windows_h5 = False):
     helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R")
     i_max_lag = config["amet"]["i_max_lag"]
     ann_line = (
         '                windows_annotation="{input.windows_annotation}",\n'
         if with_windows_annotation else ""
+    )
+    h5_line = (
+        '                win_h5="{input.win_h5}",\n'
+        if with_windows_h5 else ""
     )
     return rf"""
         mkdir -p {{params.out_dir}}
@@ -530,7 +559,7 @@ def _ecker_render_shell(with_windows_annotation = False):
                 win_cell_feature="{{input.win_cell_feature}}",
                 win_feature="{{input.win_feature}}",
                 win_bed="{{input.win_bed}}",
-{ann_line}                manifest="{{input.manifest}}",
+{ann_line}{h5_line}                manifest="{{input.manifest}}",
                 out_dir="{{params.out_dir}}",
                 log_path="{{log}}",
                 threads={{threads}},
@@ -579,8 +608,9 @@ rule render_ecker_windows:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker_windows.Rmd"),
-        scripts = RMD_SHARED_SCRIPTS,
+        scripts = RMD_SHARED_SCRIPTS + [WINDOWS_H5_R],
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_h5 = op.join(ECKER_RUN, "windows", "all.windows.h5"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
         windows_annotation = op.join(ECKER_RUN, "beds", "windows_annotation.tsv.gz"),
@@ -596,7 +626,7 @@ rule render_ecker_windows:
         op.join(ECKER_RUN, "logs", "render_ecker_windows.log"),
     threads: 4
     shell:
-        _ecker_render_shell(with_windows_annotation = True)
+        _ecker_render_shell(with_windows_annotation = True, with_windows_h5 = True)
 
 
 rule render_ecker_embeddings:
@@ -604,8 +634,9 @@ rule render_ecker_embeddings:
         op.join("..", "envs", "r-tools.yml")
     input:
         rmd = op.join(REPO_ROOT, "workflow", "Rmd", "ecker_embeddings.Rmd"),
-        scripts = RMD_SHARED_SCRIPTS + [EMBEDDING_UTILS_R],
+        scripts = RMD_SHARED_SCRIPTS + [EMBEDDING_UTILS_R, WINDOWS_H5_R],
         win_cell_feature = op.join(ECKER_RUN, "windows", "all.cell_feature.tsv.gz"),
+        win_h5 = op.join(ECKER_RUN, "windows", "all.windows.h5"),
         win_feature = op.join(ECKER_RUN, "windows", "all.feature.tsv.gz"),
         win_bed = op.join(ECKER_RUN, "beds", "windows.bed"),
         windows_annotation = op.join(ECKER_RUN, "beds", "windows_annotation.tsv.gz"),
@@ -624,7 +655,7 @@ rule render_ecker_embeddings:
         op.join(ECKER_RUN, "logs", "render_ecker_embeddings.log"),
     threads: 4
     shell:
-        _ecker_render_shell(with_windows_annotation = True)
+        _ecker_render_shell(with_windows_annotation = True, with_windows_h5 = True)
 
 
 rule render_fig_ecker_rmd:

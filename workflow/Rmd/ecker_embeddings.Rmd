@@ -13,6 +13,7 @@ output:
 params:
   features_dir: ""
   win_cell_feature: ""
+  win_h5: ""
   win_feature: ""
   win_bed: ""
   windows_annotation: ""
@@ -71,6 +72,7 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(tidyr)
   library(BiocParallel)
+  library(HDF5Array)
   library(uwot)
   library(irlba)
   library(matrixStats)
@@ -86,6 +88,7 @@ repo_root <- normalizePath(file.path(dirname(knitr::current_input()), "..", ".."
 source(file.path(repo_root, "workflow", "scripts", "plot_theme.R"))
 source(file.path(repo_root, "workflow", "scripts", "palettes.R"))
 source(file.path(repo_root, "workflow", "scripts", "embedding_utils.R"))
+source(file.path(repo_root, "workflow", "scripts", "windows_h5.R"))
 
 
 knitr::opts_chunk$set(
@@ -111,15 +114,7 @@ assay_map <- c(
 
 ## Cell selection and NA-aware embedding
 
-The cells embedded here are not a uniformly random subsample. For each
-(SubRegion, SubType) annotation we keep up to a fixed number of cells, picking
-the highest-coverage cells (file size on disk is monotonic in CpG count) and
-distributing the slots round-robin across plates. Stratifying by plate first
-keeps a single high-coverage plate from dominating an annotation. The visible
-cost is that any residual plate effect (cell cycle, batch) is preserved rather
-than averaged out across plates; the alternative of random sampling produced
-embeddings collapsed to a handful of cells per group because of how few windows
-were complete.
+The cells embedded here are every cell in the dataset manifest (cells.tsv). The windows run applies no per-stratum cap, unlike the per-feature runs, which keep at most max_cells_per_combo cells per (region, sub_type). Using all cells keeps the embedding at atlas scale instead of collapsing each cell type to a handful of representatives, at the cost of preserving any residual plate effect (cell cycle, batch) rather than averaging it out.
 
 scBS-seq methylation and per-cell entropy values have a meaningful zero
 (unmethylated CpG, zero local entropy) which is distinct from missing coverage.
@@ -134,36 +129,28 @@ filter they are never dropped to make a feature block dense.
 # Load data
 
 ```{r load_amet}
-## amet ships per-cell-per-window i_total and per-cell mean_meth.
-## Build cells x windows matrices, one per assay.
-win_cf <- fread(params$win_cell_feature)
+## amet's window-scope output is a per-(cell, window) long table too large to
+## read whole; an upstream rule pivots it into an HDF5 store. load_windows_h5
+## returns realized windows x cells matrices, one per assay.
+wd <- load_windows_h5(params$win_h5)
 man <- fread(params$manifest)
 
-col_data <- as.data.frame(unique(win_cf[, .(cell_id)]))
-col_data <- merge(col_data, as.data.frame(man),
-                  by = "cell_id", all.x = TRUE)
+assays_list <- list(
+  i_total = wd$i_total,
+  meth = wd$meth
+)
+
+col_data <- merge(data.frame(cell_id = wd$cell_id, stringsAsFactors = FALSE),
+                  as.data.frame(man), by = "cell_id", all.x = TRUE, sort = FALSE)
+rownames(col_data) <- col_data$cell_id
+## Align col_data rows to the matrix column order.
+col_data <- col_data[wd$cell_id, , drop = FALSE]
 col_data$cell_class <- factor(col_data$cell_class)
 col_data$major_type <- factor(col_data$major_type)
 col_data$region <- factor(col_data$region)
 col_data$sub_type <- factor(col_data$sub_type)
-rownames(col_data) <- col_data$cell_id
 
 cc_lvls <- sort(unique(as.character(col_data$cell_class)))
-
-build_assay_mat <- function(value_col) {
-  m <- dcast(win_cf, feature_id ~ cell_id, value.var = value_col,
-             fun.aggregate = mean)
-  rn <- m$feature_id
-  m <- as.matrix(m[, -1])
-  rownames(m) <- rn
-  m[!is.finite(m)] <- NA
-  m[, col_data$cell_id, drop = FALSE]
-}
-
-assays_list <- list(
-  i_total = build_assay_mat("i_total"),
-  meth = build_assay_mat("mean_meth")
-)
 
 cat("Cells:", nrow(col_data), "\n")
 cat("Windows:", nrow(assays_list$i_total), "\n")
@@ -176,7 +163,9 @@ print(table(col_data$cell_class, useNA = "ifany"))
 
 ```{r helpers}
 hvw_pca_umap <- function(mat) {
-  run_embedding(mat, n_hvf = N_HVW, n_pcs = N_PCS,
+  ## run_embedding needs an in-memory matrix, so the HDF5-backed assay is
+  ## realized here. TODO: check if memory is too greedy at this realization.
+  run_embedding(as.matrix(mat), n_hvf = N_HVW, n_pcs = N_PCS,
                 n_neighbors = 15L, min_dist = 0.3, seed = 42L)
 }
 
@@ -314,7 +303,8 @@ ve_win <- bind_rows(lapply(names(assay_map), function(akey) {
   lbl <- assay_map[[akey]]
   if (is.null(win_embeds[[lbl]]) || !akey %in% names(assays_list)) return(NULL)
   kept <- win_embeds[[lbl]]$kept_cols
-  hvw_mat <- assays_list[[akey]][win_embeds[[lbl]]$hvf_idx, kept, drop = FALSE]
+  hvw_mat <- as.matrix(
+    assays_list[[akey]][win_embeds[[lbl]]$hvf_idx, kept, drop = FALSE])
   data.frame(
     assay = lbl,
     cell_class = median(row_variance_explained(hvw_mat, col_data$cell_class[kept]), na.rm = TRUE),
@@ -367,7 +357,7 @@ for (akey in names(assay_map)) {
   mat <- assays_list[[akey]]
   ns <- na_stats(mat)
 
-  hvf_mat <- mat[em$hvf_idx, em$kept_cols, drop = FALSE]
+  hvf_mat <- as.matrix(mat[em$hvf_idx, em$kept_cols, drop = FALSE])
   hvf_row_var <- matrixStats::rowVars(hvf_mat, na.rm = TRUE)
 
   diag_rows[[lbl]] <- data.frame(
@@ -477,8 +467,10 @@ is empty.
 ```{r locus_umap_i_total_data}
 i_total_window_embed <- NULL
 if (nrow(assays_list$i_total) > 0L) {
+  ## Realize the HDF5-backed assay for run_embedding.
+  ## TODO: check if memory is too greedy at this realization.
   i_total_window_embed <- tryCatch(
-    run_embedding(t(assays_list$i_total), n_hvf = N_HVW, n_pcs = N_PCS,
+    run_embedding(as.matrix(t(assays_list$i_total)), n_hvf = N_HVW, n_pcs = N_PCS,
                   n_neighbors = 15L, min_dist = 0.3, seed = 42L),
     error = function(e) {
       message("[locus_umap_i_total] failed: ", conditionMessage(e)); NULL })
@@ -520,6 +512,8 @@ if (is.null(i_total_window_embed)) {
 ```{r locus_umap_i_norm_data}
 ## Canonical i_norm: i_total / (k_max * H(mean_meth)) per (window, cell).
 ## H is binary Shannon entropy. k_max comes from amet's --i-max-lag via params.
+## Realizes the HDF5-backed assays for the per-column i_norm loop and the
+## embedding. TODO: check if memory is too greedy at this realization.
 i_total_mat <- as.matrix(assays_list$i_total)
 meth_mat <- as.matrix(assays_list$meth)
 i_norm_mat <- matrix(NA_real_, nrow(i_total_mat), ncol(i_total_mat),

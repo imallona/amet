@@ -470,8 +470,14 @@ def list_crc_windows_outputs(wildcards):
 def _crc_render_shell(with_annotation = True):
     helpers = op.join(REPO_ROOT, "workflow", "scripts", "render_logging.R")
     i_max_lag = config["amet"]["i_max_lag"]
+    # annotation_line is interpolated into the rf-string below as a value, so
+    # the f-string does not brace-double it the way it does the literal
+    # {{...}} fields. Use single braces here so the final shell string carries
+    # a fillable {input.windows_annotation} for snakemake, not an escaped
+    # literal. With double braces the Rmd received the text
+    # "{input.windows_annotation}" and silently loaded no annotation.
     annotation_line = (
-        '\n                windows_annotation="{{input.windows_annotation}}",'
+        '\n                windows_annotation="{input.windows_annotation}",'
         if with_annotation else ""
     )
     return rf"""

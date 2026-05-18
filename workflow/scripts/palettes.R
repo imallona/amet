@@ -175,13 +175,19 @@ crc_location_pal <- c(
   "MO" = "#E6AB02"
 )
 
+## All 10 CRC patients in the full run. Colors are the RColorBrewer Paired
+## 12-set; CRC01-CRC15 (the 7 present in proto runs) keep their original
+## colors, CRC09/CRC12/CRC14 take the next free Paired hues.
 crc_patient_pal <- c(
   "CRC01" = "#A6CEE3",
   "CRC02" = "#1F78B4",
   "CRC04" = "#B2DF8A",
+  "CRC09" = "#FF7F00",
   "CRC10" = "#33A02C",
   "CRC11" = "#FB9A99",
+  "CRC12" = "#CAB2D6",
   "CRC13" = "#E31A1C",
+  "CRC14" = "#6A3D9A",
   "CRC15" = "#FDBF6F"
 )
 
@@ -189,9 +195,12 @@ crc_patient_shapes <- c(
   "CRC01" = 0L,
   "CRC02" = 1L,
   "CRC04" = 2L,
+  "CRC09" = 7L,
   "CRC10" = 5L,
   "CRC11" = 6L,
+  "CRC12" = 8L,
   "CRC13" = 3L,
+  "CRC14" = 9L,
   "CRC15" = 4L
 )
 

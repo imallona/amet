@@ -3,7 +3,7 @@
 ##
 ## Not intended for laptops: the runs allocate hundreds of GB of virtual
 ## memory across many parallel amet jobs. The recipes set ulimit -v as a
-## soft safeguard (100 GB per process, see ULIMIT_KB) and let snakemake fan
+## soft safeguard (200 GB per process, see ULIMIT_KB) and let snakemake fan
 ## out across CORES cores. The ulimit is per-process: every job shell
 ## inherits the same cap, it is not a shared budget across rules.
 ##
@@ -21,14 +21,14 @@
 ##                                    (default: proto)
 ##   CORES        snakemake --cores value (default 40)
 ##   ULIMIT_KB    per-process virtual memory cap in KB, inherited by every
-##                job shell (default 104857600, i.e. 100 GB)
+##                job shell (default 209715200, i.e. 200 GB)
 ##   CONDA_ENV    name of the conda env that holds snakemake (default snakemake)
 ##   CONDA_INIT   path to the conda activation script
 ##                (default ~/miniconda3/bin/activate)
 
 MODE        ?= proto
 CORES       ?= 40
-ULIMIT_KB   ?= 104857600
+ULIMIT_KB   ?= 209715200
 CONDA_ENV   ?= snakemake
 CONDA_INIT  ?= $(HOME)/miniconda3/bin/activate
 
@@ -41,9 +41,14 @@ DATASETS_CONFIG := config/datasets_$(MODE).yaml
 ACTIVATE := source $(CONDA_INIT) && conda activate $(CONDA_ENV) && \
             ulimit -v $(ULIMIT_KB)
 
+## --rerun-triggers mtime: a job is rerun only when an input file is newer
+## than its outputs, not when rule code, params, or the conda env change.
+## This keeps report reruns from cascading into the expensive amet jobs.
+##
 ## The trailing `--` stops snakemake's option parsing so subsequent positional
 ## tokens are unambiguously targets, not extra --configfile values.
 SNAKEMAKE := snakemake --use-conda --cores $(CORES) -p \
+             --rerun-triggers mtime \
              --configfile $(DATASETS_CONFIG) --
 
 .PHONY: all simulations argelaguet crc ecker dryrun unlock clean help \
@@ -68,7 +73,8 @@ ecker:
 
 dryrun:
 	cd $(WORKFLOW_DIR) && bash -c '$(ACTIVATE) && \
-	  snakemake --cores $(CORES) --configfile $(DATASETS_CONFIG) \
+	  snakemake --cores $(CORES) --rerun-triggers mtime \
+	  --configfile $(DATASETS_CONFIG) \
 	  -n -- simulations argelaguet crc ecker'
 
 unlock:

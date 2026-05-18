@@ -87,9 +87,9 @@ flush_cell <- function(dc) {
     warning("cell not in manifest, skipped: ", cid)
     return(invisible())
   }
-  h5write(matrix(dc$i_total, ncol = 1L), opt$output, "i_total",
+  h5write(matrix(as.double(dc$i_total), ncol = 1L), opt$output, "i_total",
           index = list(seq_len(n_windows), j))
-  h5write(matrix(dc$meth, ncol = 1L), opt$output, "meth",
+  h5write(matrix(as.double(dc$mean_meth), ncol = 1L), opt$output, "meth",
           index = list(seq_len(n_windows), j))
   seen_cols <<- c(seen_cols, j)
 }
